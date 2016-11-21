@@ -45,7 +45,7 @@
 using namespace std;
 
 #define _WINDOWS
-#include "..\..\..\include\common.h"
+#include "common.h"
 #include "ndisapi.h"
 #include "iphlp.h"
 #include "dhcp_typedefs.h"
