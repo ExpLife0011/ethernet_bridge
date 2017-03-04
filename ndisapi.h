@@ -8,6 +8,11 @@
 /*************************************************************************/
 
 //
+// Disable GetVersionExW deprecated warning (this file is included from Windows 95 and up)
+//
+#pragma warning(disable : 4996)
+
+//
 // Medium the Ndis Driver is running on (OID_GEN_MEDIA_SUPPORTED/ OID_GEN_MEDIA_IN_USE).
 //
 enum class NdisMedium
@@ -125,6 +130,15 @@ enum
 
 typedef BOOL (__stdcall *IsWow64ProcessPtr)(HANDLE hProcess, PBOOL Wow64Process);
 
+// Simple OSVERSIONINFO extension
+struct CVersionInfo: public OSVERSIONINFO
+{
+	CVersionInfo (){
+		dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+		::GetVersionEx(this);
+	}
+};
+
 class CNdisApi 
 {
 public:
@@ -193,6 +207,37 @@ public:
 			DWORD dwUserFriendlyNameLength
 			);
 
+	static BOOL
+		CNdisApi::IsNdisWanIp(
+			LPCSTR szAdapterName
+		);
+
+	static void
+		RecalculateIPChecksum(
+			PINTERMEDIATE_BUFFER pPacket
+		);
+
+	static void
+		RecalculateICMPChecksum(
+			PINTERMEDIATE_BUFFER pPacket
+		);
+
+	static void
+		RecalculateTCPChecksum(
+			PINTERMEDIATE_BUFFER pPacket
+		);
+
+	static void
+		RecalculateUDPChecksum(
+			PINTERMEDIATE_BUFFER pPacket
+		);
+
+	static BOOL IsWindows7OrLater() 
+	{ 
+		return (ms_Version.dwMajorVersion > 6) ||
+			((ms_Version.dwMajorVersion == 6) && (ms_Version.dwMinorVersion > 0)); 
+	}
+
 private:
 	// Private member variables
 	mutable OVERLAPPED				m_ovlp;
@@ -201,7 +246,8 @@ private:
 
 	HANDLE					m_hFileHandle;
 	BOOL					m_bIsLoadSuccessfully;
-	OSVERSIONINFO			m_Version;
 	IsWow64ProcessPtr		m_pfnIsWow64Process;
 	BOOL					m_bIsWow64Process;
+
+	static	CVersionInfo	ms_Version;
 };

@@ -6,7 +6,6 @@
 /*																		 */
 /* Description: Main dll module											 */
 /*************************************************************************/
-
 #include "stdafx.h"
 
 // pointer truncation
@@ -20,10 +19,11 @@
 #define DEVICE_NDISWANIPV6 "\\DEVICE\\NDISWANIPV6"
 #define USER_NDISWANIPV6 "WAN Network Interface (IPv6)"
 #define REGSTR_VAL_CONNECTION "\\Connection"
-#define REGSTR_NAME "Name"
+#define REGSTR_VAL_NAME "Name"
 #define REGSTR_VAL_SERVICE_NAME "ServiceName"
 #define REGSTR_VAL_DRIVER_DESC "DriverDesc"
 #define REGSTR_VAL_TITLE "Title"
+#define REGSTR_VAL_PNPINSTANCEID "PnPInstanceId"
 
 
 #define REGSTR_NETWORK_CONTROL_KEY "SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\"
@@ -31,6 +31,9 @@
 #define REGSTR_MSTCP_CLASS_NET "SYSTEM\\CurrentControlSet\\Services\\Class\\Net\\"
 
 #define OID_GEN_CURRENT_PACKET_FILTER			0x0001010E
+
+// OS version information
+CVersionInfo CNdisApi::ms_Version;
 
 //
 // This is the constructor of a class that has been exported.
@@ -41,8 +44,8 @@ CNdisApi::CNdisApi (const TCHAR* pszFileName)
 	TCHAR pszFullName [ FILE_NAME_SIZE ];
 
 	// Format full file name
-	_tcscpy ( pszFullName, _T("\\\\.\\") );
-	_tcscat ( pszFullName, pszFileName );
+	_tcscpy_s ( pszFullName, FILE_NAME_SIZE, _T("\\\\.\\") );
+	_tcscat_s ( pszFullName, FILE_NAME_SIZE, pszFileName );
 
 	m_bIsLoadSuccessfully = FALSE;
 	 
@@ -69,9 +72,8 @@ CNdisApi::CNdisApi (const TCHAR* pszFileName)
 	// Check if we are running in WOW64
 	//
 	m_bIsWow64Process = FALSE;
-	m_Version.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-	::GetVersionEx(&m_Version);
-	if (((m_Version.dwMajorVersion == 5)&&(m_Version.dwMinorVersion >= 1))/*Windows XP/2003*/ || (m_Version.dwMajorVersion > 5)/*Windows Vista or later*/)
+
+	if (((ms_Version.dwMajorVersion == 5)&&(ms_Version.dwMinorVersion >= 1))/*Windows XP/2003*/ || (ms_Version.dwMajorVersion > 5)/*Windows Vista or later*/)
 	{
 		 HMODULE hKernel32 = ::GetModuleHandle(TEXT("kernel32.dll"));
 		 if (hKernel32)
@@ -185,6 +187,7 @@ BOOL CNdisApi::SendPacketToMstcp ( PETH_REQUEST pPacket ) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ETH_REQUEST_WOW64 EthRequest;
@@ -202,7 +205,7 @@ BOOL CNdisApi::SendPacketToMstcp ( PETH_REQUEST pPacket ) const
 		// Initialize ETH_REQUEST_WOW64
 		EthRequest.hAdapterHandle = *((ULARGE_INTEGER*)pPacket->hAdapterHandle);
 		EthRequest.EthPacket.Buffer.HighPart = 0;
-		EthRequest.EthPacket.Buffer.LowPart = (DWORD)&Buffer;
+		EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
@@ -216,6 +219,7 @@ BOOL CNdisApi::SendPacketToMstcp ( PETH_REQUEST pPacket ) const
 
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
@@ -235,6 +239,7 @@ BOOL CNdisApi::SendPacketToAdapter ( PETH_REQUEST pPacket ) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ETH_REQUEST_WOW64 EthRequest;
@@ -252,7 +257,7 @@ BOOL CNdisApi::SendPacketToAdapter ( PETH_REQUEST pPacket ) const
 		// Initialize ETH_REQUEST_WOW64
 		EthRequest.hAdapterHandle = *((ULARGE_INTEGER*)pPacket->hAdapterHandle);
 		EthRequest.EthPacket.Buffer.HighPart = 0;
-		EthRequest.EthPacket.Buffer.LowPart = (DWORD)&Buffer;
+		EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
@@ -266,6 +271,7 @@ BOOL CNdisApi::SendPacketToAdapter ( PETH_REQUEST pPacket ) const
 
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
@@ -285,6 +291,7 @@ BOOL CNdisApi::ReadPacket ( PETH_REQUEST pPacket ) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ETH_REQUEST_WOW64 EthRequest;
@@ -293,7 +300,7 @@ BOOL CNdisApi::ReadPacket ( PETH_REQUEST pPacket ) const
 		// Initialize ETH_REQUEST_WOW64
 		EthRequest.hAdapterHandle = *((ULARGE_INTEGER*)pPacket->hAdapterHandle);
 		EthRequest.EthPacket.Buffer.HighPart = 0;
-		EthRequest.EthPacket.Buffer.LowPart = (DWORD)&Buffer;
+		EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_READ_PACKET,
@@ -318,6 +325,7 @@ BOOL CNdisApi::ReadPacket ( PETH_REQUEST pPacket ) const
 		}
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_READ_PACKET,
@@ -337,6 +345,7 @@ BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
@@ -362,7 +371,7 @@ BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
 
 				// Initialize ETH_REQUEST_WOW64
 				pEthRequest->EthPacket[i].Buffer.HighPart = 0;
-				pEthRequest->EthPacket[i].Buffer.LowPart = (DWORD)&Buffers[i];
+				pEthRequest->EthPacket[i].Buffer.LowPart = (ULONG_PTR)&Buffers[i];
 			}
 
 			bIOResult = DeviceIoControl(
@@ -390,6 +399,7 @@ BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
 		}
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
@@ -409,6 +419,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
@@ -434,7 +445,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 
 				// Initialize ETH_REQUEST_WOW64
 				pEthRequest->EthPacket[i].Buffer.HighPart = 0;
-				pEthRequest->EthPacket[i].Buffer.LowPart = (DWORD)&Buffers[i];
+				pEthRequest->EthPacket[i].Buffer.LowPart = (ULONG_PTR)&Buffers[i];
 			}
 
 			bIOResult = DeviceIoControl(
@@ -462,6 +473,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 		}
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
@@ -482,6 +494,7 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 	BOOL bIOResult = FALSE;
 	unsigned i = 0;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
@@ -498,7 +511,7 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 			{
 				// Initialize ETH_REQUEST_WOW64
 				pEthRequest->EthPacket[i].Buffer.HighPart = 0;
-				pEthRequest->EthPacket[i].Buffer.LowPart = (DWORD)&Buffers[i];
+				pEthRequest->EthPacket[i].Buffer.LowPart = (ULONG_PTR)&Buffers[i];
 			}
 
 			bIOResult = DeviceIoControl(
@@ -540,6 +553,7 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 		}
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_READ_PACKETS,
@@ -735,12 +749,13 @@ BOOL CNdisApi::SetPacketEvent (HANDLE hAdapter, HANDLE hWin32Event) const
 
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ADAPTER_EVENT_WOW64 AdapterEvent64;
 		AdapterEvent64.hAdapterHandle = *((ULARGE_INTEGER*)AdapterEvent.hAdapterHandle);
 		AdapterEvent64.hEvent.HighPart = 0;
-		AdapterEvent64.hEvent.LowPart = (DWORD)AdapterEvent.hEvent;
+		AdapterEvent64.hEvent.LowPart = (ULONG_PTR)AdapterEvent.hEvent;
 
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SET_EVENT,
@@ -753,6 +768,7 @@ BOOL CNdisApi::SetPacketEvent (HANDLE hAdapter, HANDLE hWin32Event) const
 					  );
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SET_EVENT,
@@ -805,11 +821,12 @@ BOOL CNdisApi::SetWANEvent (HANDLE hWin32Event) const
 
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ULARGE_INTEGER ulRing0Event;
 		ulRing0Event.HighPart = 0;
-		ulRing0Event.LowPart = (DWORD)hRing0Event;
+		ulRing0Event.LowPart = (ULONG_PTR)hRing0Event;
 
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SET_WAN_EVENT,
@@ -822,6 +839,7 @@ BOOL CNdisApi::SetWANEvent (HANDLE hWin32Event) const
 					  );
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SET_WAN_EVENT,
@@ -874,11 +892,12 @@ BOOL CNdisApi::SetAdapterListChangeEvent (HANDLE hWin32Event) const
 
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ULARGE_INTEGER ulRing0Event;
 		ulRing0Event.HighPart = 0;
-		ulRing0Event.LowPart = (DWORD)hRing0Event;
+		ulRing0Event.LowPart = (ULONG_PTR)hRing0Event;
 
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SET_ADAPTER_EVENT,
@@ -891,6 +910,7 @@ BOOL CNdisApi::SetAdapterListChangeEvent (HANDLE hWin32Event) const
 					  );
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
 					  IOCTL_NDISRD_SET_ADAPTER_EVENT,
@@ -1156,7 +1176,7 @@ BOOL CNdisApi::GetPacketFilterTable ( PSTATIC_FILTER_TABLE pFilterList ) const
                   NULL,   // Bytes Returned
                   NULL
 				  );
-
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		// Adapter handle values in the table contain values which are not valid for the client
@@ -1169,12 +1189,13 @@ BOOL CNdisApi::GetPacketFilterTable ( PSTATIC_FILTER_TABLE pFilterList ) const
 				if (m_AdaptersList.m_nAdapterHandle[j].QuadPart == pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
 				{
 					pFilterList->m_StaticFilters[i].m_Adapter.HighPart = 0;
-					pFilterList->m_StaticFilters[i].m_Adapter.LowPart = (DWORD)&m_AdaptersList.m_nAdapterHandle[j];
+					pFilterList->m_StaticFilters[i].m_Adapter.LowPart = (ULONG_PTR)&m_AdaptersList.m_nAdapterHandle[j];
 					break;
 				}
 			}
 		}
 	}
+#endif //_WIN64
 
 	 return bIOResult;
 }
@@ -1193,6 +1214,7 @@ BOOL CNdisApi::GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList
                   NULL
 				  );
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		// Adapter handle values in the table contain values which are not valid for the client
@@ -1205,12 +1227,13 @@ BOOL CNdisApi::GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList
 				if (m_AdaptersList.m_nAdapterHandle[j].QuadPart == pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
 				{
 					pFilterList->m_StaticFilters[i].m_Adapter.HighPart = 0;
-					pFilterList->m_StaticFilters[i].m_Adapter.LowPart = (DWORD)&m_AdaptersList.m_nAdapterHandle[j];
+					pFilterList->m_StaticFilters[i].m_Adapter.LowPart = (ULONG_PTR)&m_AdaptersList.m_nAdapterHandle[j];
 					break;
 				}
 			}
 		}
 	}
+#endif //_WIN64
 
 	 return bIOResult;
 }
@@ -1526,25 +1549,25 @@ BOOL
 
 	if (_stricmp(szAdapterName, DEVICE_NDISWANIP) == 0)
 	{
-		strcpy (szUserFriendlyName, USER_NDISWANIP);
+		strcpy_s (szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANIP);
 		return TRUE;
 	}
 
 	if (_stricmp(szAdapterName, DEVICE_NDISWANBH) == 0)
 	{
-		strcpy (szUserFriendlyName, USER_NDISWANBH);
+		strcpy_s (szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANBH);
 		return TRUE;
 	}
 
 	if (_stricmp(szAdapterName, DEVICE_NDISWANIPV6) == 0)
 	{
-		strcpy (szUserFriendlyName, USER_NDISWANIPV6);
+		strcpy_s (szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANIPV6);
 		return TRUE;
 	}
 
-	strcpy (szFriendlyNameKey, REGSTR_NETWORK_CONTROL_KEY);
-	strcpy ((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
-	strcpy ((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
+	strcpy_s (szFriendlyNameKey, MAX_PATH * 2, REGSTR_NETWORK_CONTROL_KEY);
+	strcpy_s ((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
+	strcpy_s ((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
 
 	LONG lResult = RegOpenKeyExA (
 						HKEY_LOCAL_MACHINE,
@@ -1556,7 +1579,7 @@ BOOL
 
 	if (lResult == ERROR_SUCCESS)
 	{
-		lResult = RegQueryValueExA(hKey, REGSTR_NAME, NULL, &dwType, (LPBYTE)szUserFriendlyName, &dwUserFriendlyNameLength);
+		lResult = RegQueryValueExA(hKey, REGSTR_VAL_NAME, NULL, &dwType, (LPBYTE)szUserFriendlyName, &dwUserFriendlyNameLength);
 							
 		RegCloseKey(hKey);
 	}
@@ -1580,8 +1603,8 @@ BOOL
 	DWORD		dwType;
 	BOOL		bRet = TRUE;
 
-	strcpy (szFriendlyNameKey, REGSTR_MSTCP_CLASS_NET);
-	strcpy ((PCHAR)szFriendlyNameKey + strlen(szFriendlyNameKey), szAdapterName);
+	strcpy_s (szFriendlyNameKey, MAX_PATH * 2, REGSTR_MSTCP_CLASS_NET);
+	strcpy_s ((PCHAR)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), szAdapterName);
 
 	LONG lResult = RegOpenKeyExA (
 					HKEY_LOCAL_MACHINE,
@@ -1607,6 +1630,270 @@ BOOL
 
 	return bRet;
 }
+
+BOOL
+CNdisApi::IsNdisWanIp(
+	LPCSTR szAdapterName
+)
+{
+	HKEY		hKey;
+	char		szFriendlyNameKey[MAX_PATH * 2];
+	char		szPnPInstanceId[MAX_PATH * 2];
+	DWORD		dwType;
+	DWORD		PnPInstanceIdSize = MAX_PATH * 2;
+	
+	//
+	// Before Windows 10 NDISWANIP can be identified bt internal name
+	//
+	if (ms_Version.dwMajorVersion < 10 /*before Windows 10*/)
+	{
+		if (_stricmp(szAdapterName, DEVICE_NDISWANIP) == 0)
+		{
+			return TRUE;
+		}
+	}
+	
+	//
+	// Starting Windows 10 NDISWANIP is hidden behind GUID, so need identify it
+	//
+	strcpy_s(szFriendlyNameKey, MAX_PATH * 2, REGSTR_NETWORK_CONTROL_KEY);
+	strcpy_s((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
+	strcpy_s((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
+
+	LONG lResult = RegOpenKeyExA(
+		HKEY_LOCAL_MACHINE,
+		szFriendlyNameKey,
+		0,
+		KEY_READ,
+		&hKey
+	);
+
+	if (lResult == ERROR_SUCCESS)
+	{
+		lResult = RegQueryValueExA(hKey, REGSTR_VAL_PNPINSTANCEID, NULL, &dwType, (LPBYTE)szPnPInstanceId, &PnPInstanceIdSize);
+
+		RegCloseKey(hKey);
+	}
+	else
+	{
+		return FALSE;
+	}
+
+	if (strcmp(szPnPInstanceId, "SWD\\MSRRAS\\MS_NDISWANIP") == 0)
+		return TRUE;
+	else
+		return FALSE;
+}
+
+//
+// Function recalculates IP checksum
+//
+void
+CNdisApi::RecalculateIPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	unsigned short word16;
+	unsigned int sum = 0;
+	unsigned int i = 0;
+	PUCHAR buff;
+
+	iphdr_ptr pIpHeader = (iphdr_ptr)&pPacket->m_IBuffer[sizeof(ether_header)];
+
+	// Initialize checksum to zero
+	pIpHeader->ip_sum = 0;
+	buff = (PUCHAR)pIpHeader;
+
+	// Calculate IP header checksum
+	for (i = 0; i < pIpHeader->ip_hl * sizeof(DWORD); i = i + 2)
+	{
+		word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
+		sum = sum + word16;
+	}
+
+	// keep only the last 16 bits of the 32 bit calculated sum and add the carries
+	while (sum >> 16)
+		sum = (sum & 0xFFFF) + (sum >> 16);
+
+	// Take the one's complement of sum
+	sum = ~sum;
+
+	pIpHeader->ip_sum = htons((unsigned short)sum);
+}
+
+//
+// Function recalculates ICMP checksum
+//
+void
+CNdisApi::RecalculateICMPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	unsigned short word16, padd = 0;
+	unsigned int i, sum = 0;
+	PUCHAR buff;
+	DWORD dwIcmpLen;
+	icmphdr_ptr pIcmpHeader = NULL;
+	iphdr_ptr pIpHeader = (iphdr_ptr)&pPacket->m_IBuffer[sizeof(ether_header)];
+
+	// Sanity check
+	if (pIpHeader->ip_p == IPPROTO_ICMP)
+	{
+		pIcmpHeader = (icmphdr_ptr)(((PUCHAR)pIpHeader) + sizeof(DWORD)*pIpHeader->ip_hl);
+	}
+	else
+		return;
+
+	dwIcmpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;
+
+	if ((dwIcmpLen / 2) * 2 != dwIcmpLen)
+	{
+		padd = 1;
+		pPacket->m_IBuffer[dwIcmpLen + pIpHeader->ip_hl * 4 + sizeof(ether_header)] = 0;
+	}
+
+	buff = (PUCHAR)pIcmpHeader;
+	pIcmpHeader->checksum = 0;
+
+	// make 16 bit words out of every two adjacent 8 bit words and 
+	// calculate the sum of all 16 bit words
+	for (i = 0; i< dwIcmpLen + padd; i = i + 2) {
+		word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
+		sum = sum + (unsigned long)word16;
+	}
+
+	// keep only the last 16 bits of the 32 bit calculated sum and add the carries
+	while (sum >> 16)
+		sum = (sum & 0xFFFF) + (sum >> 16);
+
+	// Take the one's complement of sum
+	sum = ~sum;
+
+	pIcmpHeader->checksum = ntohs((unsigned short)sum);
+}
+
+//
+// Function recalculates TCP checksum
+//
+void
+CNdisApi::RecalculateTCPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	tcphdr_ptr pTcpHeader = NULL;
+	unsigned short word16, padd = 0;
+	unsigned int i, sum = 0;
+	PUCHAR buff;
+	DWORD dwTcpLen;
+
+	iphdr_ptr pIpHeader = (iphdr_ptr)&pPacket->m_IBuffer[sizeof(ether_header)];
+
+	// Sanity check
+	if (pIpHeader->ip_p == IPPROTO_TCP)
+	{
+		pTcpHeader = (tcphdr_ptr)(((PUCHAR)pIpHeader) + sizeof(DWORD)*pIpHeader->ip_hl);
+	}
+	else
+		return;
+
+	dwTcpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;//pPacket->m_Length - ((PUCHAR)(pTcpHeader) - pPacket->m_IBuffer);
+
+	if ((dwTcpLen / 2) * 2 != dwTcpLen)
+	{
+		padd = 1;
+		pPacket->m_IBuffer[dwTcpLen + pIpHeader->ip_hl * 4 + sizeof(ether_header)] = 0;
+	}
+
+	buff = (PUCHAR)pTcpHeader;
+	pTcpHeader->th_sum = 0;
+
+	// make 16 bit words out of every two adjacent 8 bit words and 
+	// calculate the sum of all 16 vit words
+	for (i = 0; i< dwTcpLen + padd; i = i + 2) {
+		word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
+		sum = sum + (unsigned long)word16;
+	}
+
+	// add the TCP pseudo header which contains:
+	// the IP source and destination addresses,
+
+	sum = sum + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w2);
+	sum = sum + ntohs(pIpHeader->ip_dst.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_dst.S_un.S_un_w.s_w2);
+
+	// the protocol number and the length of the TCP packet
+	sum = sum + IPPROTO_TCP + (unsigned short)dwTcpLen;
+
+	// keep only the last 16 bits of the 32 bit calculated sum and add the carries
+	while (sum >> 16)
+		sum = (sum & 0xFFFF) + (sum >> 16);
+
+	// Take the one's complement of sum
+	sum = ~sum;
+
+	pTcpHeader->th_sum = htons((unsigned short)sum);
+}
+
+//
+// Function recalculates UDP checksum
+//
+void
+CNdisApi::RecalculateUDPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	udphdr_ptr pUdpHeader = NULL;
+	unsigned short word16, padd = 0;
+	unsigned int i, sum = 0;
+	PUCHAR buff;
+	DWORD dwUdpLen;
+
+	iphdr_ptr pIpHeader = (iphdr_ptr)&pPacket->m_IBuffer[sizeof(ether_header)];
+
+	// Sanity check
+	if (pIpHeader->ip_p == IPPROTO_UDP)
+	{
+		pUdpHeader = (udphdr_ptr)(((PUCHAR)pIpHeader) + sizeof(DWORD)*pIpHeader->ip_hl);
+	}
+	else
+		return;
+
+	dwUdpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;//pPacket->m_Length - ((PUCHAR)(pTcpHeader) - pPacket->m_IBuffer);
+
+	if ((dwUdpLen / 2) * 2 != dwUdpLen)
+	{
+		padd = 1;
+		pPacket->m_IBuffer[dwUdpLen + pIpHeader->ip_hl * 4 + sizeof(ether_header)] = 0;
+	}
+
+	buff = (PUCHAR)pUdpHeader;
+	pUdpHeader->th_sum = 0;
+
+	// make 16 bit words out of every two adjacent 8 bit words and 
+	// calculate the sum of all 16 vit words
+	for (i = 0; i< dwUdpLen + padd; i = i + 2) {
+		word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
+		sum = sum + (unsigned long)word16;
+	}
+
+	// add the UDP pseudo header which contains:
+	// the IP source and destination addresses,
+
+	sum = sum + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w2);
+	sum = sum + ntohs(pIpHeader->ip_dst.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_dst.S_un.S_un_w.s_w2);
+
+	// the protocol number and the length of the UDP packet
+	sum = sum + IPPROTO_UDP + (unsigned short)dwUdpLen;
+
+	// keep only the last 16 bits of the 32 bit calculated sum and add the carries
+	while (sum >> 16)
+		sum = (sum & 0xFFFF) + (sum >> 16);
+
+	// Take the one's complement of sum
+	sum = ~sum;
+
+	pUdpHeader->th_sum = ntohs((unsigned short)sum);
+}
+
 
 HANDLE __stdcall OpenFilterDriver ( const TCHAR* pszFileName )
 {
@@ -1945,5 +2232,41 @@ BOOL
 						szUserFriendlyName,
 						dwUserFriendlyNameLength
 						);
+}
+
+void
+	__stdcall
+	RecalculateIPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+	)
+{
+	CNdisApi::RecalculateIPChecksum (pPacket);
+}
+
+void
+	__stdcall
+	RecalculateICMPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+	)
+{
+	CNdisApi::RecalculateICMPChecksum (pPacket);
+}
+
+void
+	__stdcall
+	RecalculateTCPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+	)
+{
+	CNdisApi::RecalculateTCPChecksum (pPacket);
+}
+
+void
+	__stdcall
+	RecalculateUDPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+)
+{
+	CNdisApi::RecalculateUDPChecksum (pPacket);
 }
 

@@ -14,10 +14,10 @@
 //
 // Simple wrapper class for Windows handle
 //
-class SafeHandle : public std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>
+class SafeObjectHandle : public std::unique_ptr<std::remove_pointer<HANDLE>::type, void(*)(HANDLE)>
 {
 public:
-	SafeHandle(HANDLE handle) : unique_ptr(handle, &SafeHandle::close)
+	SafeObjectHandle(HANDLE handle) : unique_ptr(handle, &SafeObjectHandle::close)
 	{
 	}
 	operator HANDLE() const
@@ -40,10 +40,10 @@ private:
 //
 // Simple Wrapper for Windows event object
 //
-class SafeEvent : public SafeHandle
+class SafeEvent : public SafeObjectHandle
 {
 public:
-	SafeEvent(HANDLE handle) : SafeHandle(handle)
+	SafeEvent(HANDLE handle) : SafeObjectHandle(handle)
 	{
 	}
 	
@@ -54,12 +54,12 @@ public:
 
 	bool signal() const
 	{
-		return static_cast<bool>(SetEvent(get()));
+		return SetEvent(get()) ? true : false;
 	}
 
 	bool reset() const
 	{
-		return static_cast<bool>(ResetEvent(get()));
+		return ResetEvent(get()) ? true : false;
 	}
 
 };
@@ -140,14 +140,14 @@ public:
 
 	void						InitializeInterface() noexcept; // Initialize additional network interface parameters 
 	HANDLE						GetAdapter() const { return m_hAdapter; } // Returnes network interface handle value
-	bool						SetHwFilter(unsigned dwFilter) { return m_api.SetHwPacketFilter(m_hAdapter, dwFilter); } // Set network filter for the interface
+	bool						SetHwFilter(unsigned dwFilter) { return m_api.SetHwPacketFilter(m_hAdapter, dwFilter)?true:false; } // Set network filter for the interface
 	unsigned long				GetHwFilter(); // Get current network filter
 	void						Release(); // Stops filtering the network interface and tries tor restore its original state
 	void						SetMode(unsigned dwFlags); // Set filtering mode for the network interface
 	bool						IsLocal(unsigned char* ptr) const { return (mac_address(ptr) == m_HwAddress); } // Check is provided MAC address belongs to this adapter
 	unsigned					WaitEvent(unsigned dwMilliseconds) const {return m_Event.wait(dwMilliseconds);} // Waits for network interface event to be signalled
 	bool						ResetEvent() const { return m_Event.reset(); }
-	bool						SetPacketEvent() const { return m_api.SetPacketEvent(m_hAdapter, m_Event); }
+	bool						SetPacketEvent() const { return m_api.SetPacketEvent(m_hAdapter, m_Event)?true:false; }
 	const std::string&			GetInternalName() const { return m_InternalName; }
 	const std::string&			GetFriendlyName() const { return m_FriendlyName; }
 	bool						IsWLAN() const { return m_bIsWLAN; }

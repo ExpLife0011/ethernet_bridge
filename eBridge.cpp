@@ -78,9 +78,11 @@ void EthernetBridge::InitializeNetworkInterfaces()
 
 	for (size_t i = 0; i < AdList.m_nAdapterCount; ++i)
 	{
-		if (static_cast<NdisMedium>(AdList.m_nAdapterMediumList[i]) == NdisMedium::NdisMedium802_3)
+		if ((static_cast<NdisMedium>(AdList.m_nAdapterMediumList[i]) == NdisMedium::NdisMedium802_3) ||
+			(static_cast<NdisMedium>(AdList.m_nAdapterMediumList[i]) == NdisMedium::NdisMediumNative802_11)
+			)
 		{
-			CNdisApi::ConvertWindows2000AdapterName((const char*)AdList.m_szAdapterNameList[i], szFriendlyName.data(), szFriendlyName.size());
+			CNdisApi::ConvertWindows2000AdapterName((const char*)AdList.m_szAdapterNameList[i], szFriendlyName.data(), static_cast<DWORD>(szFriendlyName.size()));
 
 			auto pAdapter = std::make_unique<CNetworkAdapter>(
 				*this,
@@ -99,7 +101,8 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 	PETH_M_REQUEST			ReadRequest;
 	PETH_M_REQUEST			BridgeRequest;
 	PETH_M_REQUEST			MstcpBridgeRequest;
-	INTERMEDIATE_BUFFER 	PacketBuffer[maximum_packet_block];
+	//INTERMEDIATE_BUFFER 	PacketBuffer[maximum_packet_block];
+	std::unique_ptr<INTERMEDIATE_BUFFER[]> PacketBuffer = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
 
 	//
 	// Each working thread gets a pair of network interfaces
@@ -127,7 +130,7 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 	ZeroMemory(MstcpBridgeRequest, sizeof(ETH_M_REQUEST) +
 		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
 
-	ZeroMemory(&PacketBuffer, sizeof(INTERMEDIATE_BUFFER)*maximum_packet_block);
+	ZeroMemory(PacketBuffer.get(), sizeof(INTERMEDIATE_BUFFER)*maximum_packet_block);
 	ReadRequest->hAdapterHandle = Adapters[First]->GetAdapter();
 	BridgeRequest->hAdapterHandle = Adapters[Second]->GetAdapter();
 	MstcpBridgeRequest->hAdapterHandle = Adapters[Second]->GetAdapter();

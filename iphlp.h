@@ -130,7 +130,8 @@ typedef struct tcphdr {
 	tcp_seq	th_seq;			/* sequence number */
 	tcp_seq	th_ack;			/* acknowledgement number */
 	u_char	th_x2:4,		/* (unused) */
-		    th_off:4;		/* data offset */
+			th_off:4;		/* data offset */
+#define TCP_NO_OPTIONS	0x05
 	u_char	th_flags;
 #define	TH_FIN	0x01
 #define	TH_SYN	0x02
@@ -197,6 +198,25 @@ typedef struct ipv6ext_frag
     unsigned short		ip6_offlg;      // offset, reserved, and flag
     unsigned int		ip6_ident;      // identification
 }ipv6ext_frag, *ipv6ext_frag_ptr;
+
+typedef struct mss_tcp_options {
+#define	MSS_TYPE	0x02
+#define	SACK_TYPE	0x04
+	u_char  mss_type;
+	u_char  mss_option_length;
+	u_short mss_value;
+}mss_tcp_options, *mss_tcp_options_ptr;
+
+//
+// ICMP header
+//
+typedef struct icmphdr {
+	unsigned char type;          // ICMP packet type
+	unsigned char code;          // Type sub code
+	unsigned short checksum;
+	unsigned short id;
+	unsigned short seq;
+}icmphdr, *icmphdr_ptr;
 
 #pragma pack()
 
