@@ -348,6 +348,10 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 			ReadRequest->dwPacketsSuccess = 0;
 		}
 	}
+
+	free(ReadRequest);
+	free(BridgeRequest);
+	free(MstcpBridgeRequest);
 }
 
 void EthernetBridge::RecalculateUDPChecksum(PINTERMEDIATE_BUFFER pPacket)
