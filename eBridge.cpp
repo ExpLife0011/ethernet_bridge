@@ -19,6 +19,8 @@ void EthernetBridge::StartBridge(size_t First, size_t Second)
 	// Start Ethernet Bridge working threads
 	m_BridgedInterfaces = make_pair(First, Second);
 
+	m_bIsRunning.test_and_set();
+
 	m_WorkingThreads.push_back(
 		std::thread(
 			EthernetBridge::BridgeWorkingThread,
@@ -40,7 +42,7 @@ void EthernetBridge::StartBridge(size_t First, size_t Second)
 
 void EthernetBridge::StopBridge()
 {
-	m_bIsRunning = false;
+	m_bIsRunning.clear();
 
 	m_NetworkInterfaces[m_BridgedInterfaces.first]->Release();
 	m_NetworkInterfaces[m_BridgedInterfaces.second]->Release();
@@ -98,10 +100,7 @@ void EthernetBridge::InitializeNetworkInterfaces()
 
 void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t First, size_t Second)
 {
-	PETH_M_REQUEST			ReadRequest;
-	PETH_M_REQUEST			BridgeRequest;
-	PETH_M_REQUEST			MstcpBridgeRequest;
-	//INTERMEDIATE_BUFFER 	PacketBuffer[maximum_packet_block];
+	PETH_M_REQUEST			ReadRequest, BridgeRequest, MstcpBridgeRequest;
 	std::unique_ptr<INTERMEDIATE_BUFFER[]> PacketBuffer = std::make_unique<INTERMEDIATE_BUFFER[]>(maximum_packet_block);
 
 	//
@@ -114,27 +113,31 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 	ULONG_PTR dwThreadIndex = reinterpret_cast<ULONG_PTR>(Adapters[First]->GetAdapter());
 
 	//
-	// Initialize Request
+	// Initialize Requests
 	//
-	ReadRequest = (PETH_M_REQUEST)malloc(sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
-	BridgeRequest = (PETH_M_REQUEST)malloc(sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
-	MstcpBridgeRequest = (PETH_M_REQUEST)malloc(sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
 
-	ZeroMemory(ReadRequest, sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
-	ZeroMemory(BridgeRequest, sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
-	ZeroMemory(MstcpBridgeRequest, sizeof(ETH_M_REQUEST) +
-		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1));
+	using request_storage_type_t = std::aligned_storage_t<sizeof(ETH_M_REQUEST) +
+		sizeof(NDISRD_ETH_Packet)*(maximum_packet_block - 1)>;
 
-	ZeroMemory(PacketBuffer.get(), sizeof(INTERMEDIATE_BUFFER)*maximum_packet_block);
+	// 1. Allocate memory using unique_ptr for auto-delete on thread exit
+	auto ReadRequestPtr = std::make_unique<request_storage_type_t>();
+	auto BridgeRequestPtr = std::make_unique<request_storage_type_t>();
+	auto MstcpBridgeRequestPtr = std::make_unique<request_storage_type_t>();
+
+	// 2. Get raw pointers for convinience
+	ReadRequest = reinterpret_cast<PETH_M_REQUEST>(ReadRequestPtr.get());
+	BridgeRequest = reinterpret_cast<PETH_M_REQUEST>(BridgeRequestPtr.get());
+	MstcpBridgeRequest = reinterpret_cast<PETH_M_REQUEST>(MstcpBridgeRequestPtr.get());
+
 	ReadRequest->hAdapterHandle = Adapters[First]->GetAdapter();
 	BridgeRequest->hAdapterHandle = Adapters[Second]->GetAdapter();
 	MstcpBridgeRequest->hAdapterHandle = Adapters[Second]->GetAdapter();
 	ReadRequest->dwPacketsNumber = maximum_packet_block;
+
+	//
+	// Initialize packet buffers
+	//
+	ZeroMemory(PacketBuffer.get(), sizeof(INTERMEDIATE_BUFFER)*maximum_packet_block);
 
 	for (unsigned i = 0; i < maximum_packet_block; ++i)
 	{
@@ -144,33 +147,29 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 	// Set event for helper driver
 	if (!Adapters[First]->SetPacketEvent())
 	{
-		throw(std::system_error(
-			std::error_code(GetLastError(),
-				std::system_category()), 
-			"Failed to create notification event or set it for driver.")
-			);
+		return;
 	}
 
 	if (!Adapters[First]->IsWLAN())
 	{
 		if (!Adapters[First]->SetHwFilter(NDIS_PACKET_TYPE_PROMISCUOUS))
-			throw(std::system_error(
-				std::error_code(GetLastError(),
-					std::system_category()),
-				"Failed to set promiscuous mode for the network interface.")
-				);
+			return;
 	}
-	
+
 	Adapters[First]->SetMode(MSTCP_FLAG_SENT_LISTEN|MSTCP_FLAG_RECV_LISTEN|MSTCP_FLAG_FILTER_DIRECT|MSTCP_FLAG_LOOPBACK_BLOCK);
 	 
-	while (eBridgePtr->m_bIsRunning)
+	while (eBridgePtr->m_bIsRunning.test_and_set())
 	{
 		Adapters[First]->WaitEvent(INFINITE);
  
 		// Reset event, as we don't need to wake up all working threads at once
  
-		if (eBridgePtr->m_bIsRunning)
+		if (eBridgePtr->m_bIsRunning.test_and_set())
 			Adapters[First]->ResetEvent();
+		else
+		{
+			break;
+		}
  
 		// Start reading packet from the driver
  
@@ -285,7 +284,7 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 									// Change DHCP flags to broadcast 
 									pDhcp->flags = htons(0x8000);
 									RecalculateUDPChecksum(ReadRequest->EthPacket[i].Buffer);
-									RecalculateIPChecksum(pIpHeader);
+									RecalculateIPChecksum(ReadRequest->EthPacket[i].Buffer);
 								}
 
 							}
@@ -349,93 +348,9 @@ void EthernetBridge::BridgeWorkingThread(EthernetBridge* eBridgePtr, size_t Firs
 		}
 	}
 
-	free(ReadRequest);
-	free(BridgeRequest);
-	free(MstcpBridgeRequest);
+	eBridgePtr->m_bIsRunning.clear();
 }
 
-void EthernetBridge::RecalculateUDPChecksum(PINTERMEDIATE_BUFFER pPacket)
-{
-	udphdr_ptr pUdpHeader = NULL;
-	unsigned short word16, padd = 0;
-	unsigned int i, sum = 0;
-	PUCHAR buff;
-	DWORD dwUdpLen;
-
-	iphdr_ptr pIpHeader = (iphdr_ptr)&pPacket->m_IBuffer[sizeof(ether_header)];
-
-	// Sanity check
-	if (pIpHeader->ip_p == IPPROTO_UDP)
-	{
-		pUdpHeader = (udphdr_ptr)(((PUCHAR)pIpHeader) + sizeof(DWORD)*pIpHeader->ip_hl);
-	}
-	else
-		return;
-
-	dwUdpLen = ntohs(pIpHeader->ip_len) - pIpHeader->ip_hl * 4;//pPacket->m_Length - ((PUCHAR)(pTcpHeader) - pPacket->m_IBuffer);
-
-	if ((dwUdpLen / 2) * 2 != dwUdpLen)
-	{
-		padd = 1;
-		pPacket->m_IBuffer[dwUdpLen + pIpHeader->ip_hl * 4 + sizeof(ether_header)] = 0;
-	}
-
-	buff = (PUCHAR)pUdpHeader;
-	pUdpHeader->th_sum = 0;
-
-	// make 16 bit words out of every two adjacent 8 bit words and 
-	// calculate the sum of all 16 vit words
-	for (i = 0; i< dwUdpLen + padd; i = i + 2) {
-		word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
-		sum = sum + (unsigned long)word16;
-	}
-
-	// add the UDP pseudo header which contains:
-	// the IP source and destination addresses,
-
-	sum = sum + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_src.S_un.S_un_w.s_w2);
-	sum = sum + ntohs(pIpHeader->ip_dst.S_un.S_un_w.s_w1) + ntohs(pIpHeader->ip_dst.S_un.S_un_w.s_w2);
-
-	// the protocol number and the length of the UDP packet
-	sum = sum + IPPROTO_UDP + (unsigned short)dwUdpLen;
-
-	// keep only the last 16 bits of the 32 bit calculated sum and add the carries
-	while (sum >> 16)
-		sum = (sum & 0xFFFF) + (sum >> 16);
-
-	// Take the one's complement of sum
-	sum = ~sum;
-
-	pUdpHeader->th_sum = ntohs((unsigned short)sum);
-}
-
-void EthernetBridge::RecalculateIPChecksum(iphdr_ptr pIpHeader)
-{
-	unsigned short word16;
-	unsigned int sum = 0;
-	unsigned int i = 0;
-	PUCHAR buff;
-
-	// Initialize checksum to zero
-	pIpHeader->ip_sum = 0;
-	buff = (PUCHAR)pIpHeader;
-
-	// Calculate IP header checksum
-	for (i = 0; i < pIpHeader->ip_hl * sizeof(DWORD); i = i + 2)
-	{
-		word16 = ((buff[i] << 8) & 0xFF00) + (buff[i + 1] & 0xFF);
-		sum = sum + word16;
-	}
-
-	// keep only the last 16 bits of the 32 bit calculated sum and add the carries
-	while (sum >> 16)
-		sum = (sum & 0xFFFF) + (sum >> 16);
-
-	// Take the one's complement of sum
-	sum = ~sum;
-
-	pIpHeader->ip_sum = htons((unsigned short)sum);
-}
 
 int main(int argc, char* argv[])
 {

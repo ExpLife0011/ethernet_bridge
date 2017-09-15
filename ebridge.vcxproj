@@ -267,7 +267,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\include\Common.h" />
+    <ClInclude Include="Common.h" />
     <ClInclude Include="dhcp_typedefs.h" />
     <ClInclude Include="ebridge.h" />
     <ClInclude Include="iphlp.h" />

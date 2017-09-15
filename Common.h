@@ -17,9 +17,9 @@
 #include <WinIoctl.h>   // Compiling Win32 Applications Or DLL's
 #endif // _WINDOWS
 
-#define NDISRD_VERSION			0x02073000
+#define NDISRD_VERSION			0x02083000
 #define NDISRD_MAJOR_VERSION	0x0003
-#define NDISRD_MINOR_VERSION	0x0207
+#define NDISRD_MINOR_VERSION	0x0208
 
 // Common strings set
 #define DRIVER_NAME_A "NDISRD"
@@ -253,7 +253,7 @@ struct _PACKET_OID_DATA_WOW64
 typedef
 struct _RAS_LINK_INFO
 {
-#define RAS_LINK_BUFFER_LENGTH 1024
+#define RAS_LINK_BUFFER_LENGTH 2048
 	ULONG  LinkSpeed;			// Specifies the speed of the link, in units of 100 bps.
 								// Zero indicates no change from the speed returned when the protocol called NdisRequest with OID_GEN_LINK_SPEED. 
 	ULONG  MaximumTotalSize;	// Specifies the maximum number of bytes per packet that the protocol can send over the network.
@@ -262,7 +262,7 @@ struct _RAS_LINK_INFO
 	UCHAR  LocalAddress [ETHER_ADDR_LENGTH];	// Represents the protocol-determined context for indications on this link in Ethernet-style format.
 	ULONG  ProtocolBufferLength;// Specifies the number of bytes in the buffer at ProtocolBuffer
 	UCHAR  ProtocolBuffer [RAS_LINK_BUFFER_LENGTH]; // Containing protocol-specific information supplied by a higher-level component that makes connections through NDISWAN
-													// to the appropriate protocol(s). Maximum size is 600 bytes (on Windows Vista)
+													// to the appropriate protocol(s). Maximum observed size is 600 bytes on Windows Vista, 1200 on Windows 10
 } RAS_LINK_INFO, *PRAS_LINK_INFO;
 
 typedef

@@ -8,27 +8,25 @@
 /*************************************************************************/
 #include "stdafx.h"
 
-// pointer truncation
-#pragma warning(disable:4311)
-#pragma warning(disable:4312)
-
 #define DEVICE_NDISWANIP "\\DEVICE\\NDISWANIP"
 #define USER_NDISWANIP "WAN Network Interface (IP)"
 #define DEVICE_NDISWANBH "\\DEVICE\\NDISWANBH"
 #define USER_NDISWANBH "WAN Network Interface (BH)"
 #define DEVICE_NDISWANIPV6 "\\DEVICE\\NDISWANIPV6"
 #define USER_NDISWANIPV6 "WAN Network Interface (IPv6)"
+#define REGSTR_COMPONENTID_NDISWANIP "ms_ndiswanip"
+#define REGSTR_COMPONENTID_NDISWANIPV6 "ms_ndiswanipv6"
+#define REGSTR_COMPONENTID_NDISWANBH "ms_ndiswanbh"
 #define REGSTR_VAL_CONNECTION "\\Connection"
 #define REGSTR_VAL_NAME "Name"
 #define REGSTR_VAL_SERVICE_NAME "ServiceName"
 #define REGSTR_VAL_DRIVER_DESC "DriverDesc"
 #define REGSTR_VAL_TITLE "Title"
-#define REGSTR_VAL_PNPINSTANCEID "PnPInstanceId"
-
 
 #define REGSTR_NETWORK_CONTROL_KEY "SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\"
 #define REGSTR_NETWORK_CARDS TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\NetworkCards")
 #define REGSTR_MSTCP_CLASS_NET "SYSTEM\\CurrentControlSet\\Services\\Class\\Net\\"
+#define REGSTR_NETWORK_CONTROL_CLASS TEXT("SYSTEM\\CurrentControlSet\\Control\\Class\\{4D36E972-E325-11CE-BFC1-08002BE10318}")
 
 #define OID_GEN_CURRENT_PACKET_FILTER			0x0001010E
 
@@ -39,28 +37,33 @@ CVersionInfo CNdisApi::ms_Version;
 // This is the constructor of a class that has been exported.
 // see ndisapi.h for the class definition
 //
-CNdisApi::CNdisApi (const TCHAR* pszFileName)
+CNdisApi::CNdisApi(const TCHAR* pszFileName)
 {
-	TCHAR pszFullName [ FILE_NAME_SIZE ];
+	TCHAR pszFullName[FILE_NAME_SIZE];
 
 	// Format full file name
-	_tcscpy_s ( pszFullName, FILE_NAME_SIZE, _T("\\\\.\\") );
-	_tcscat_s ( pszFullName, FILE_NAME_SIZE, pszFileName );
+#if _MSC_VER >= 1700
+	_tcscpy_s(pszFullName, FILE_NAME_SIZE, _T("\\\\.\\"));
+	_tcscat_s(pszFullName, FILE_NAME_SIZE, pszFileName);
+#else
+	_tcscpy(pszFullName, _T("\\\\.\\"));
+	_tcscat(pszFullName, pszFileName);
+#endif //_MSC_VER >= 1700
 
 	m_bIsLoadSuccessfully = FALSE;
-	 
+
 	// We open driver for overlapped I/O, though none of current driver services are processed asynchronously
-	m_hFileHandle = ::CreateFile ( pszFullName, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0 );
-     
+	m_hFileHandle = ::CreateFile(pszFullName, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
+
 	// If driver is opened succesfully we initialize our OVERLAPPED structure
-	if   ( m_hFileHandle == INVALID_HANDLE_VALUE )
+	if (m_hFileHandle == INVALID_HANDLE_VALUE)
 	{
 		m_ovlp.hEvent = 0;
 	}
 	else
 	{
-		m_ovlp.hEvent = CreateEvent ( 0, TRUE, FALSE, NULL );
-		if ( m_ovlp.hEvent )
+		m_ovlp.hEvent = CreateEvent(0, TRUE, FALSE, NULL);
+		if (m_ovlp.hEvent)
 		{
 			m_bIsLoadSuccessfully = TRUE;
 		}
@@ -73,71 +76,73 @@ CNdisApi::CNdisApi (const TCHAR* pszFileName)
 	//
 	m_bIsWow64Process = FALSE;
 
-	if (((ms_Version.dwMajorVersion == 5)&&(ms_Version.dwMinorVersion >= 1))/*Windows XP/2003*/ || (ms_Version.dwMajorVersion > 5)/*Windows Vista or later*/)
+	if (ms_Version.IsWindowsXPOrGreater())
 	{
-		 HMODULE hKernel32 = ::GetModuleHandle(TEXT("kernel32.dll"));
-		 if (hKernel32)
-		 {
+		HMODULE hKernel32 = ::GetModuleHandle(TEXT("kernel32.dll"));
+		if (hKernel32)
+		{
 			m_pfnIsWow64Process = (IsWow64ProcessPtr)::GetProcAddress(hKernel32, "IsWow64Process");
 			if (m_pfnIsWow64Process)
 			{
-				m_pfnIsWow64Process ( GetCurrentProcess(), &m_bIsWow64Process );
+				m_pfnIsWow64Process(GetCurrentProcess(), &m_bIsWow64Process);
 			}
-		 }
+		}
 	}
+
+	memset(m_Handle32to64, 0, sizeof(m_Handle32to64));
 }
 
 CNdisApi::~CNdisApi()
 {
-	if ( m_hFileHandle != INVALID_HANDLE_VALUE )
+	if (m_hFileHandle != INVALID_HANDLE_VALUE)
 	{
-		::CloseHandle ( m_hFileHandle );
+		::CloseHandle(m_hFileHandle);
 	}
 
-    if ( m_ovlp.hEvent )
+	if (m_ovlp.hEvent)
 	{
-		::CloseHandle ( m_ovlp.hEvent );
+		::CloseHandle(m_ovlp.hEvent);
 	}
 }
 
 BOOL CNdisApi::DeviceIoControl(DWORD dwService, void *BuffIn, int SizeIn, void *BuffOut, int SizeOut, unsigned long *SizeRet, LPOVERLAPPED povlp) const
 {
-     BOOL Ret = 0;
+	BOOL Ret = 0;
 
-	 // Supports overlapped and nonoverlapped IO
+	// Supports overlapped and nonoverlapped IO
 
-	 if ( !SizeRet ) SizeRet = &m_BytesReturned;
+	if (!SizeRet) SizeRet = &m_BytesReturned;
 
-     if   ( m_hFileHandle != INVALID_HANDLE_VALUE )
-     {
-		 if( povlp == NULL )
-			 Ret = ::DeviceIoControl ( m_hFileHandle, dwService, BuffIn, SizeIn, BuffOut, SizeOut, SizeRet, &m_ovlp);
-		 else 
-			 Ret = ::DeviceIoControl ( m_hFileHandle, dwService, BuffIn, SizeIn, BuffOut, SizeOut, SizeRet, povlp);
+	if (m_hFileHandle != INVALID_HANDLE_VALUE)
+	{
+		if (povlp == NULL)
+			Ret = ::DeviceIoControl(m_hFileHandle, dwService, BuffIn, SizeIn, BuffOut, SizeOut, SizeRet, &m_ovlp);
+		else
+			Ret = ::DeviceIoControl(m_hFileHandle, dwService, BuffIn, SizeIn, BuffOut, SizeOut, SizeRet, povlp);
 
-     }
+	}
 
-     return Ret;
+	return Ret;
 }
 
 ULONG CNdisApi::GetVersion() const
 {
-	 ULONG nDriverAPIVersion = 0xFFFFFFFF;
-	 
-	 BOOL bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_GET_VERSION,
-					  &nDriverAPIVersion,
-					  sizeof(ULONG),
-					  &nDriverAPIVersion,
-					  sizeof(ULONG),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+	ULONG nDriverAPIVersion = 0xFFFFFFFF;
 
-	 return nDriverAPIVersion;
+	BOOL bIOResult = DeviceIoControl(
+		IOCTL_NDISRD_GET_VERSION,
+		&nDriverAPIVersion,
+		sizeof(ULONG),
+		&nDriverAPIVersion,
+		sizeof(ULONG),
+		NULL,   // Bytes Returned
+		NULL
+	);
+
+	return nDriverAPIVersion;
 }
 
-BOOL CNdisApi::GetTcpipBoundAdaptersInfo ( PTCP_AdapterList pAdapters ) const
+BOOL CNdisApi::GetTcpipBoundAdaptersInfo(PTCP_AdapterList pAdapters) const
 {
 	BOOL bIOResult = FALSE;
 
@@ -145,45 +150,103 @@ BOOL CNdisApi::GetTcpipBoundAdaptersInfo ( PTCP_AdapterList pAdapters ) const
 	{
 		// In case of WOW64 process pass our own structure to driver
 		bIOResult = DeviceIoControl(
-						  IOCTL_NDISRD_GET_TCPIP_INTERFACES,
-						  &m_AdaptersList,
-						  sizeof(TCP_AdapterList_WOW64),
-						  &m_AdaptersList,
-						  sizeof(TCP_AdapterList_WOW64),
-						  NULL,   // Bytes Returned
-						  NULL
-						  );
+			IOCTL_NDISRD_GET_TCPIP_INTERFACES,
+			&m_AdaptersList,
+			sizeof(TCP_AdapterList_WOW64),
+			&m_AdaptersList,
+			sizeof(TCP_AdapterList_WOW64),
+			NULL,   // Bytes Returned
+			NULL
+		);
 		if (bIOResult)
 		{
+			// Zero-initialize
+			ZeroMemory(pAdapters, sizeof(TCP_AdapterList));
+
 			// Simply copy all the fields except adapters handles
 			pAdapters->m_nAdapterCount = m_AdaptersList.m_nAdapterCount;
 			memmove(pAdapters->m_szAdapterNameList, m_AdaptersList.m_szAdapterNameList, sizeof(pAdapters->m_szAdapterNameList));
 			memmove(pAdapters->m_nAdapterMediumList, m_AdaptersList.m_nAdapterMediumList, sizeof(pAdapters->m_nAdapterMediumList));
 			memmove(pAdapters->m_czCurrentAddress, m_AdaptersList.m_czCurrentAddress, sizeof(pAdapters->m_czCurrentAddress));
 			memmove(pAdapters->m_usMTU, m_AdaptersList.m_usMTU, sizeof(pAdapters->m_usMTU));
-			for (unsigned i = 0; i < m_AdaptersList.m_nAdapterCount; ++i)
+
+			if (m_Handle32to64[0].QuadPart == 0)
 			{
-				pAdapters->m_nAdapterHandle[i] = (HANDLE)&m_AdaptersList.m_nAdapterHandle[i];
+				// First call to GetTcpipBoundAdaptersInfo, initialize m_Handle32to64
+				m_Handle32to64[0].QuadPart = (-1);
+
+				for (unsigned i = 0; i < m_AdaptersList.m_nAdapterCount; ++i)
+				{
+					m_Handle32to64[i + 1].QuadPart = m_AdaptersList.m_nAdapterHandle[i].QuadPart;
+					pAdapters->m_nAdapterHandle[i] = (HANDLE)static_cast<ULONG_PTR>(i + 1);
+				}
+			}
+			else
+			{
+				for (unsigned i = 0; i < m_AdaptersList.m_nAdapterCount; ++i)
+				{
+					// Search for real handle in the array
+					for (unsigned j = 1; j < ADAPTER_LIST_SIZE + 1; ++j)
+					{
+						if (m_Handle32to64[j].QuadPart == m_AdaptersList.m_nAdapterHandle[i].QuadPart)
+						{
+							pAdapters->m_nAdapterHandle[i] = (HANDLE)static_cast<ULONG_PTR>(j);
+							break;
+						}
+					}
+
+					if (!pAdapters->m_nAdapterHandle[i])
+					{
+						// This is a new interface, not present in the table
+						// Search through the table for the first entry which can be replaced
+
+						unsigned pos = 0;
+
+						for (unsigned j = 1; j < ADAPTER_LIST_SIZE + 1; ++j)
+						{
+							for (unsigned k = 0; k < m_AdaptersList.m_nAdapterCount; ++k)
+							{
+								if (m_Handle32to64[j].QuadPart == m_AdaptersList.m_nAdapterHandle[k].QuadPart)
+									break;
+
+								// We are at the last element and m_Handle32to64[j] is not found
+								if (k == (m_AdaptersList.m_nAdapterCount - 1))
+								{
+									pos = j;
+								}
+
+								if (pos)
+									break;
+							}
+						}
+
+						if (pos)
+						{
+							m_Handle32to64[pos].QuadPart = m_AdaptersList.m_nAdapterHandle[i].QuadPart;
+							pAdapters->m_nAdapterHandle[i] = (HANDLE)static_cast<ULONG_PTR>(pos);
+						}
+					}
+				}
 			}
 		}
 	}
 	else
 	{
 		bIOResult = DeviceIoControl(
-						  IOCTL_NDISRD_GET_TCPIP_INTERFACES,
-						  pAdapters,
-						  sizeof(TCP_AdapterList),
-						  pAdapters,
-						  sizeof(TCP_AdapterList),
-						  NULL,   // Bytes Returned
-						  NULL
-						  );
+			IOCTL_NDISRD_GET_TCPIP_INTERFACES,
+			pAdapters,
+			sizeof(TCP_AdapterList),
+			pAdapters,
+			sizeof(TCP_AdapterList),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::SendPacketToMstcp ( PETH_REQUEST pPacket ) const
+BOOL CNdisApi::SendPacketToMstcp(PETH_REQUEST pPacket) const
 {
 	BOOL bIOResult = FALSE;
 
@@ -198,44 +261,44 @@ BOOL CNdisApi::SendPacketToMstcp ( PETH_REQUEST pPacket ) const
 		Buffer.m_Flags = pPacket->EthPacket.Buffer->m_Flags;
 		Buffer.m_8021q = pPacket->EthPacket.Buffer->m_8021q;
 		Buffer.m_FilterID = pPacket->EthPacket.Buffer->m_FilterID;
-		memmove(Buffer.m_Reserved, pPacket->EthPacket.Buffer->m_Reserved, sizeof(ULONG)*4);
+		memmove(Buffer.m_Reserved, pPacket->EthPacket.Buffer->m_Reserved, sizeof(ULONG) * 4);
 		Buffer.m_Length = pPacket->EthPacket.Buffer->m_Length;
 		memmove(Buffer.m_IBuffer, pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_Length);
 
 		// Initialize ETH_REQUEST_WOW64
-		EthRequest.hAdapterHandle = *((ULARGE_INTEGER*)pPacket->hAdapterHandle);
+		EthRequest.hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pPacket->hAdapterHandle].QuadPart;
 		EthRequest.EthPacket.Buffer.HighPart = 0;
 		EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
-					  &EthRequest,
-					  sizeof(ETH_REQUEST_WOW64),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
+			&EthRequest,
+			sizeof(ETH_REQUEST_WOW64),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 
 	}
 	else
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
-					  pPacket,
-					  sizeof(ETH_REQUEST),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SEND_PACKET_TO_MSTCP,
+			pPacket,
+			sizeof(ETH_REQUEST),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::SendPacketToAdapter ( PETH_REQUEST pPacket ) const
+BOOL CNdisApi::SendPacketToAdapter(PETH_REQUEST pPacket) const
 {
 	BOOL bIOResult = FALSE;
 
@@ -250,44 +313,44 @@ BOOL CNdisApi::SendPacketToAdapter ( PETH_REQUEST pPacket ) const
 		Buffer.m_Flags = pPacket->EthPacket.Buffer->m_Flags;
 		Buffer.m_8021q = pPacket->EthPacket.Buffer->m_8021q;
 		Buffer.m_FilterID = pPacket->EthPacket.Buffer->m_FilterID;
-		memmove(Buffer.m_Reserved, pPacket->EthPacket.Buffer->m_Reserved, sizeof(ULONG)*4);
+		memmove(Buffer.m_Reserved, pPacket->EthPacket.Buffer->m_Reserved, sizeof(ULONG) * 4);
 		Buffer.m_Length = pPacket->EthPacket.Buffer->m_Length;
 		memmove(Buffer.m_IBuffer, pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_Length);
 
 		// Initialize ETH_REQUEST_WOW64
-		EthRequest.hAdapterHandle = *((ULARGE_INTEGER*)pPacket->hAdapterHandle);
+		EthRequest.hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pPacket->hAdapterHandle].QuadPart;
 		EthRequest.EthPacket.Buffer.HighPart = 0;
 		EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
-					  &EthRequest,
-					  sizeof(ETH_REQUEST_WOW64),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
+			&EthRequest,
+			sizeof(ETH_REQUEST_WOW64),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 
 	}
 	else
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
-					  pPacket,
-					  sizeof(ETH_REQUEST),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SEND_PACKET_TO_ADAPTER,
+			pPacket,
+			sizeof(ETH_REQUEST),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::ReadPacket ( PETH_REQUEST pPacket ) const
+BOOL CNdisApi::ReadPacket(PETH_REQUEST pPacket) const
 {
 	BOOL bIOResult = FALSE;
 
@@ -298,28 +361,28 @@ BOOL CNdisApi::ReadPacket ( PETH_REQUEST pPacket ) const
 		INTERMEDIATE_BUFFER_WOW64 Buffer;
 
 		// Initialize ETH_REQUEST_WOW64
-		EthRequest.hAdapterHandle = *((ULARGE_INTEGER*)pPacket->hAdapterHandle);
+		EthRequest.hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pPacket->hAdapterHandle].QuadPart;
 		EthRequest.EthPacket.Buffer.HighPart = 0;
 		EthRequest.EthPacket.Buffer.LowPart = (ULONG_PTR)&Buffer;
 
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_READ_PACKET,
-					  &EthRequest,
-					  sizeof(ETH_REQUEST_WOW64),
-					  &EthRequest,
-					  sizeof(ETH_REQUEST_WOW64),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_READ_PACKET,
+			&EthRequest,
+			sizeof(ETH_REQUEST_WOW64),
+			&EthRequest,
+			sizeof(ETH_REQUEST_WOW64),
+			NULL,   // Bytes Returned
+			NULL
+		);
 
-		if ( bIOResult )
+		if (bIOResult)
 		{
 			// Copy the resulting packet from INTERMEDIATE_BUFFER_WOW64 to INTERMEDIATE_BUFFER
 			pPacket->EthPacket.Buffer->m_dwDeviceFlags = Buffer.m_dwDeviceFlags;
 			pPacket->EthPacket.Buffer->m_Flags = Buffer.m_Flags;
 			pPacket->EthPacket.Buffer->m_8021q = Buffer.m_8021q;
 			pPacket->EthPacket.Buffer->m_FilterID = Buffer.m_FilterID;
-			memmove(pPacket->EthPacket.Buffer->m_Reserved, Buffer.m_Reserved, sizeof(ULONG)*4);
+			memmove(pPacket->EthPacket.Buffer->m_Reserved, Buffer.m_Reserved, sizeof(ULONG) * 4);
 			pPacket->EthPacket.Buffer->m_Length = Buffer.m_Length;
 			memmove(pPacket->EthPacket.Buffer->m_IBuffer, Buffer.m_IBuffer, Buffer.m_Length);
 		}
@@ -328,34 +391,53 @@ BOOL CNdisApi::ReadPacket ( PETH_REQUEST pPacket ) const
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_READ_PACKET,
-					  pPacket,
-					  sizeof(ETH_REQUEST),
-					  pPacket,
-					  sizeof(ETH_REQUEST),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_READ_PACKET,
+			pPacket,
+			sizeof(ETH_REQUEST),
+			pPacket,
+			sizeof(ETH_REQUEST),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
+BOOL CNdisApi::SendPacketsToMstcp(PETH_M_REQUEST pPackets) const
 {
 	BOOL bIOResult = FALSE;
 
 #ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
-		PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
-		PINTERMEDIATE_BUFFER_WOW64 Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber*sizeof(INTERMEDIATE_BUFFER_WOW64));
-		memset (pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
-		memset (Buffers, 0, pPackets->dwPacketsNumber*sizeof(INTERMEDIATE_BUFFER_WOW64));
+		PETH_M_REQUEST_WOW64 pEthRequest = NULL;
+		PINTERMEDIATE_BUFFER_WOW64 Buffers = NULL;
+#if _MSC_VER <= 1700 // Before Visual Studio 2012
+		pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+		Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+#else
+		std::unique_ptr<char[]> EthRequestPtr;
+		std::unique_ptr<char[]> BuffersPtr;
+		try
+		{
+			EthRequestPtr = std::make_unique<char[]>(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+			BuffersPtr = std::make_unique<char[]>(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+
+			pEthRequest = (PETH_M_REQUEST_WOW64)EthRequestPtr.get();
+			Buffers = (PINTERMEDIATE_BUFFER_WOW64)BuffersPtr.get();
+		}
+		catch (...)
+		{
+			return bIOResult;
+		}
+#endif // Before Visual Studio 2012
 
 		if (Buffers && pEthRequest)
 		{
-			pEthRequest->hAdapterHandle = *((ULARGE_INTEGER*)pPackets->hAdapterHandle);
+			memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+			memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+			pEthRequest->hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pPackets->hAdapterHandle].QuadPart;
 			pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
 
 			for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
@@ -365,7 +447,7 @@ BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
 				Buffers[i].m_Flags = pPackets->EthPacket[i].Buffer->m_Flags;
 				Buffers[i].m_8021q = pPackets->EthPacket[i].Buffer->m_8021q;
 				Buffers[i].m_FilterID = pPackets->EthPacket[i].Buffer->m_FilterID;
-				memmove(Buffers[i].m_Reserved, pPackets->EthPacket[i].Buffer->m_Reserved, sizeof(ULONG)*4);
+				memmove(Buffers[i].m_Reserved, pPackets->EthPacket[i].Buffer->m_Reserved, sizeof(ULONG) * 4);
 				Buffers[i].m_Length = pPackets->EthPacket[i].Buffer->m_Length;
 				memmove(Buffers[i].m_IBuffer, pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_Length);
 
@@ -375,26 +457,28 @@ BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
 			}
 
 			bIOResult = DeviceIoControl(
-						  IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
-						  pEthRequest,
-						  sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
-						  NULL,
-						  0,
-						  NULL,   // Bytes Returned
-						  NULL
-						  );
-
+				IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
+				pEthRequest,
+				sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
+				NULL,
+				0,
+				NULL,   // Bytes Returned
+				NULL
+			);
+#if _MSC_VER <= 1700 // Before Visual Studio 2012
 			free(Buffers);
 			free(pEthRequest);
+#endif // Before Visual Studio 2012
 		}
 		else
 		{
-			if ( Buffers )
-				free (Buffers);
+#if _MSC_VER <= 1700 // Before Visual Studio 2012
+			if (Buffers)
+				free(Buffers);
 
-			if ( pEthRequest )
-				free (pEthRequest);
-
+			if (pEthRequest)
+				free(pEthRequest);
+#endif // Before Visual Studio 2012
 			return FALSE;
 		}
 	}
@@ -402,17 +486,17 @@ BOOL CNdisApi::SendPacketsToMstcp (PETH_M_REQUEST pPackets) const
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
-					  pPackets,
-					  sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SEND_PACKETS_TO_MSTCP,
+			pPackets,
+			sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
 BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
@@ -422,14 +506,33 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 #ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
-		PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
-		PINTERMEDIATE_BUFFER_WOW64 Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber*sizeof(INTERMEDIATE_BUFFER_WOW64));
-		memset (pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
-		memset (Buffers, 0, pPackets->dwPacketsNumber*sizeof(INTERMEDIATE_BUFFER_WOW64));
+		PETH_M_REQUEST_WOW64 pEthRequest = NULL;
+		PINTERMEDIATE_BUFFER_WOW64 Buffers = NULL;
+#if _MSC_VER <= 1700 // Before Visual Studio 2012
+		pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+		Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+#else
+		std::unique_ptr<char[]> EthRequestPtr;
+		std::unique_ptr<char[]> BuffersPtr;
+		try
+		{
+			EthRequestPtr = std::make_unique<char[]>(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+			BuffersPtr = std::make_unique<char[]>(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+
+			pEthRequest = (PETH_M_REQUEST_WOW64)EthRequestPtr.get();
+			Buffers = (PINTERMEDIATE_BUFFER_WOW64)BuffersPtr.get();
+		}
+		catch (...)
+		{
+			return bIOResult;
+		}
+#endif // Before Visual Studio 2012
 
 		if (Buffers && pEthRequest)
 		{
-			pEthRequest->hAdapterHandle = *((ULARGE_INTEGER*)pPackets->hAdapterHandle);
+			memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+			memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+			pEthRequest->hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pPackets->hAdapterHandle].QuadPart;
 			pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
 
 			for (unsigned i = 0; i < pPackets->dwPacketsNumber; ++i)
@@ -439,7 +542,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 				Buffers[i].m_Flags = pPackets->EthPacket[i].Buffer->m_Flags;
 				Buffers[i].m_8021q = pPackets->EthPacket[i].Buffer->m_8021q;
 				Buffers[i].m_FilterID = pPackets->EthPacket[i].Buffer->m_FilterID;
-				memmove(Buffers[i].m_Reserved, pPackets->EthPacket[i].Buffer->m_Reserved, sizeof(ULONG)*4);
+				memmove(Buffers[i].m_Reserved, pPackets->EthPacket[i].Buffer->m_Reserved, sizeof(ULONG) * 4);
 				Buffers[i].m_Length = pPackets->EthPacket[i].Buffer->m_Length;
 				memmove(Buffers[i].m_IBuffer, pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_Length);
 
@@ -449,26 +552,28 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 			}
 
 			bIOResult = DeviceIoControl(
-						  IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
-						  pEthRequest,
-						  sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
-						  NULL,
-						  0,
-						  NULL,   // Bytes Returned
-						  NULL
-						  );
-
+				IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
+				pEthRequest,
+				sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
+				NULL,
+				0,
+				NULL,   // Bytes Returned
+				NULL
+			);
+#if _MSC_VER <= 1700 // Before Visual Studio 2012
 			free(Buffers);
 			free(pEthRequest);
+#endif // Before Visual Studio 2012
 		}
 		else
 		{
-			if ( Buffers )
-				free (Buffers);
+#if _MSC_VER <= 1700 // Before Visual Studio 2012
+			if (Buffers)
+				free(Buffers);
 
-			if ( pEthRequest )
-				free (pEthRequest);
-
+			if (pEthRequest)
+				free(pEthRequest);
+#endif // Before Visual Studio 2012
 			return FALSE;
 		}
 	}
@@ -476,17 +581,17 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
-					  pPackets,
-					  sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SEND_PACKETS_TO_ADAPTER,
+			pPackets,
+			sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
 BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
@@ -498,13 +603,26 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 	if (m_bIsWow64Process)
 	{
 		PETH_M_REQUEST_WOW64 pEthRequest = (PETH_M_REQUEST_WOW64)malloc(sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
-		PINTERMEDIATE_BUFFER_WOW64 Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber*sizeof(INTERMEDIATE_BUFFER_WOW64));
-		memset (pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
-		memset (Buffers, 0, pPackets->dwPacketsNumber*sizeof(INTERMEDIATE_BUFFER_WOW64));
+
+		if (!pEthRequest)
+			return bIOResult;
+
+		PINTERMEDIATE_BUFFER_WOW64 Buffers = (PINTERMEDIATE_BUFFER_WOW64)malloc(pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
+
+		if (!Buffers)
+		{
+			if (pEthRequest)
+				free(pEthRequest);
+
+			return bIOResult;
+		}
+
+		memset(pEthRequest, 0, sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1));
+		memset(Buffers, 0, pPackets->dwPacketsNumber * sizeof(INTERMEDIATE_BUFFER_WOW64));
 
 		if (Buffers && pEthRequest)
 		{
-			pEthRequest->hAdapterHandle = *((ULARGE_INTEGER*)pPackets->hAdapterHandle);
+			pEthRequest->hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pPackets->hAdapterHandle].QuadPart;
 			pEthRequest->dwPacketsNumber = pPackets->dwPacketsNumber;
 
 			for (i = 0; i < pPackets->dwPacketsNumber; ++i)
@@ -515,14 +633,14 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 			}
 
 			bIOResult = DeviceIoControl(
-						  IOCTL_NDISRD_READ_PACKETS,
-						  pEthRequest,
-						  sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
-						  pEthRequest,
-						  sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
-						  NULL,   // Bytes Returned
-						  NULL
-						  );
+				IOCTL_NDISRD_READ_PACKETS,
+				pEthRequest,
+				sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
+				pEthRequest,
+				sizeof(ETH_M_REQUEST_WOW64) + sizeof(NDISRD_ETH_Packet_WOW64)*(pPackets->dwPacketsNumber - 1),
+				NULL,   // Bytes Returned
+				NULL
+			);
 
 			pPackets->dwPacketsSuccess = pEthRequest->dwPacketsSuccess;
 
@@ -533,7 +651,7 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 				pPackets->EthPacket[i].Buffer->m_Flags = Buffers[i].m_Flags;
 				pPackets->EthPacket[i].Buffer->m_8021q = Buffers[i].m_8021q;
 				pPackets->EthPacket[i].Buffer->m_FilterID = Buffers[i].m_FilterID;
-				memmove(pPackets->EthPacket[i].Buffer->m_Reserved, Buffers[i].m_Reserved, sizeof(ULONG)*4);
+				memmove(pPackets->EthPacket[i].Buffer->m_Reserved, Buffers[i].m_Reserved, sizeof(ULONG) * 4);
 				pPackets->EthPacket[i].Buffer->m_Length = Buffers[i].m_Length;
 				memmove(pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_IBuffer, Buffers[i].m_Length);
 			}
@@ -543,11 +661,11 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 		}
 		else
 		{
-			if ( Buffers )
-				free (Buffers);
+			if (Buffers)
+				free(Buffers);
 
-			if ( pEthRequest )
-				free (pEthRequest);
+			if (pEthRequest)
+				free(pEthRequest);
 
 			return FALSE;
 		}
@@ -556,169 +674,179 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_READ_PACKETS,
-					  pPackets,
-					  sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
-					  pPackets,
-					  sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_READ_PACKETS,
+			pPackets,
+			sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
+			pPackets,
+			sizeof(ETH_M_REQUEST) + sizeof(NDISRD_ETH_Packet)*(pPackets->dwPacketsNumber - 1),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::SetAdapterMode ( PADAPTER_MODE pMode ) const
+BOOL CNdisApi::SetAdapterMode(PADAPTER_MODE pMode) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ADAPTER_MODE_WOW64 AdapterMode;
 		AdapterMode.dwFlags = pMode->dwFlags;
-		AdapterMode.hAdapterHandle = *((ULARGE_INTEGER*)pMode->hAdapterHandle);
+		AdapterMode.hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pMode->hAdapterHandle].QuadPart;
 
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_ADAPTER_MODE,
-					  &AdapterMode,
-					  sizeof(ADAPTER_MODE_WOW64),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SET_ADAPTER_MODE,
+			&AdapterMode,
+			sizeof(ADAPTER_MODE_WOW64),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_ADAPTER_MODE,
-					  pMode,
-					  sizeof(ADAPTER_MODE),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SET_ADAPTER_MODE,
+			pMode,
+			sizeof(ADAPTER_MODE),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
-	
+
 	return bIOResult;
 }
 
-BOOL CNdisApi::GetAdapterMode ( PADAPTER_MODE pMode ) const
+BOOL CNdisApi::GetAdapterMode(PADAPTER_MODE pMode) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		ADAPTER_MODE_WOW64 AdapterMode;
-		AdapterMode.hAdapterHandle = *((ULARGE_INTEGER*)pMode->hAdapterHandle);
+		AdapterMode.hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)pMode->hAdapterHandle].QuadPart;
 
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_GET_ADAPTER_MODE,
-					  &AdapterMode,
-					  sizeof(ADAPTER_MODE_WOW64),
-					  &AdapterMode,
-					  sizeof(ADAPTER_MODE_WOW64),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_GET_ADAPTER_MODE,
+			&AdapterMode,
+			sizeof(ADAPTER_MODE_WOW64),
+			&AdapterMode,
+			sizeof(ADAPTER_MODE_WOW64),
+			NULL,   // Bytes Returned
+			NULL
+		);
 
 		pMode->dwFlags = AdapterMode.dwFlags;
-		
+
 	}
 	else
+#endif // _WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_GET_ADAPTER_MODE,
-					  pMode,
-					  sizeof(ADAPTER_MODE),
-					  pMode,
-					  sizeof(ADAPTER_MODE),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_GET_ADAPTER_MODE,
+			pMode,
+			sizeof(ADAPTER_MODE),
+			pMode,
+			sizeof(ADAPTER_MODE),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::FlushAdapterPacketQueue ( HANDLE hAdapter ) const
+BOOL CNdisApi::FlushAdapterPacketQueue(HANDLE hAdapter) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
+		ULARGE_INTEGER h64Adapter;
+		h64Adapter.QuadPart = m_Handle32to64[(unsigned)hAdapter].QuadPart;
+
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_FLUSH_ADAPTER_QUEUE,
-					  (ULARGE_INTEGER*)hAdapter,
-					  sizeof(ULARGE_INTEGER),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_FLUSH_ADAPTER_QUEUE,
+			&h64Adapter,
+			sizeof(ULARGE_INTEGER),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_FLUSH_ADAPTER_QUEUE,
-					  &hAdapter,
-					  sizeof(HANDLE),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_FLUSH_ADAPTER_QUEUE,
+			&hAdapter,
+			sizeof(HANDLE),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::GetAdapterPacketQueueSize ( HANDLE hAdapter, PDWORD pdwSize ) const
+BOOL CNdisApi::GetAdapterPacketQueueSize(HANDLE hAdapter, PDWORD pdwSize) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
+		ULARGE_INTEGER h64Adapter;
+		h64Adapter.QuadPart = m_Handle32to64[(unsigned)hAdapter].QuadPart;
+
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_ADAPTER_QUEUE_SIZE,
-					  (ULARGE_INTEGER*)hAdapter,
-					  sizeof(ULARGE_INTEGER),
-					  pdwSize,
-					  sizeof(DWORD),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_ADAPTER_QUEUE_SIZE,
+			&h64Adapter,
+			sizeof(ULARGE_INTEGER),
+			pdwSize,
+			sizeof(DWORD),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_ADAPTER_QUEUE_SIZE,
-					  &hAdapter,
-					  sizeof(HANDLE),
-					  pdwSize,
-					  sizeof(DWORD),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_ADAPTER_QUEUE_SIZE,
+			&hAdapter,
+			sizeof(HANDLE),
+			pdwSize,
+			sizeof(DWORD),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::SetPacketEvent (HANDLE hAdapter, HANDLE hWin32Event) const
+BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 {
 	HANDLE			hRing0Event = NULL;
-	OSVERSIONINFO	verInfo;
 	ADAPTER_EVENT	AdapterEvent;
 
 	AdapterEvent.hAdapterHandle = hAdapter;
-	
-	verInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-	GetVersionEx ( &verInfo );
 
-	if (verInfo.dwPlatformId == VER_PLATFORM_WIN32_NT)
+	if (ms_Version.IsWindowsNTPlatform())
 	{
 		// Windows NT
 		hRing0Event = hWin32Event;
@@ -726,15 +854,15 @@ BOOL CNdisApi::SetPacketEvent (HANDLE hAdapter, HANDLE hWin32Event) const
 	else
 	{
 		// Windows 9x/ME
-		HANDLE (WINAPI *pfOpenVxDHandle)(HANDLE);
+		HANDLE(WINAPI *pfOpenVxDHandle)(HANDLE);
 		HINSTANCE hKernel32Dll = LoadLibrary(TEXT("kernel32.dll"));
-		
-		if(!hKernel32Dll)
+
+		if (!hKernel32Dll)
 			return FALSE;
 
-		pfOpenVxDHandle = (HANDLE (WINAPI *)(HANDLE))GetProcAddress(hKernel32Dll, "OpenVxDHandle");
+		pfOpenVxDHandle = (HANDLE(WINAPI *)(HANDLE))GetProcAddress(hKernel32Dll, "OpenVxDHandle");
 
-		if (!pfOpenVxDHandle )
+		if (!pfOpenVxDHandle)
 			return FALSE;
 
 		if (hWin32Event)
@@ -753,197 +881,189 @@ BOOL CNdisApi::SetPacketEvent (HANDLE hAdapter, HANDLE hWin32Event) const
 	if (m_bIsWow64Process)
 	{
 		ADAPTER_EVENT_WOW64 AdapterEvent64;
-		AdapterEvent64.hAdapterHandle = *((ULARGE_INTEGER*)AdapterEvent.hAdapterHandle);
+		AdapterEvent64.hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)AdapterEvent.hAdapterHandle].QuadPart;
 		AdapterEvent64.hEvent.HighPart = 0;
 		AdapterEvent64.hEvent.LowPart = (ULONG_PTR)AdapterEvent.hEvent;
 
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_EVENT,
-					  &AdapterEvent64,
-					  sizeof(ADAPTER_EVENT_WOW64),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SET_EVENT,
+			&AdapterEvent64,
+			sizeof(ADAPTER_EVENT_WOW64),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 	else
 #endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_EVENT,
-					  &AdapterEvent,
-					  sizeof(ADAPTER_EVENT),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_SET_EVENT,
+			&AdapterEvent,
+			sizeof(ADAPTER_EVENT),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
-	 return bIOResult;
-}
-
-BOOL CNdisApi::SetWANEvent (HANDLE hWin32Event) const
-{
-	HANDLE			hRing0Event = NULL;
-	OSVERSIONINFO	verInfo;
-		
-	verInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-	GetVersionEx ( &verInfo );
-
-	if (verInfo.dwPlatformId == VER_PLATFORM_WIN32_NT)
-	{
-		// Windows NT
-		hRing0Event = hWin32Event;
-	}
-	else
-	{
-		// Windows 9x/ME
-		HANDLE (WINAPI *pfOpenVxDHandle)(HANDLE);
-		HINSTANCE hKernel32Dll = LoadLibrary(TEXT("kernel32.dll"));
-		
-		if(!hKernel32Dll)
-			return FALSE;
-
-		pfOpenVxDHandle = (HANDLE (WINAPI *)(HANDLE))GetProcAddress(hKernel32Dll, "OpenVxDHandle");
-
-		if (!pfOpenVxDHandle )
-			return FALSE;
-
-		if (hWin32Event)
-			hRing0Event = pfOpenVxDHandle(hWin32Event);
-		else
-			hRing0Event = NULL;
-
-		FreeLibrary(hKernel32Dll);
-	}
-
-	BOOL bIOResult = FALSE;
-
-#ifndef _WIN64
-	if (m_bIsWow64Process)
-	{
-		ULARGE_INTEGER ulRing0Event;
-		ulRing0Event.HighPart = 0;
-		ulRing0Event.LowPart = (ULONG_PTR)hRing0Event;
-
-		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_WAN_EVENT,
-					  &ulRing0Event,
-					  sizeof(ULARGE_INTEGER),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
-	}
-	else
-#endif //_WIN64
-	{
-		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_WAN_EVENT,
-					  &hRing0Event,
-					  sizeof(HANDLE),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
-	}
-
-	 return bIOResult;
-}
-
-BOOL CNdisApi::SetAdapterListChangeEvent (HANDLE hWin32Event) const
-{
-	HANDLE			hRing0Event = NULL;
-	OSVERSIONINFO	verInfo;
-		
-	verInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
-	GetVersionEx ( &verInfo );
-
-	if (verInfo.dwPlatformId == VER_PLATFORM_WIN32_NT)
-	{
-		// Windows NT
-		hRing0Event = hWin32Event;
-	}
-	else
-	{
-		// Windows 9x/ME
-		HANDLE (WINAPI *pfOpenVxDHandle)(HANDLE);
-		HINSTANCE hKernel32Dll = LoadLibrary(TEXT("kernel32.dll"));
-		
-		if(!hKernel32Dll)
-			return FALSE;
-
-		pfOpenVxDHandle = (HANDLE (WINAPI *)(HANDLE))GetProcAddress(hKernel32Dll, "OpenVxDHandle");
-
-		if (!pfOpenVxDHandle )
-			return FALSE;
-
-		if (hWin32Event)
-			hRing0Event = pfOpenVxDHandle(hWin32Event);
-		else
-			hRing0Event = NULL;
-
-		FreeLibrary(hKernel32Dll);
-	}
-
-	BOOL bIOResult = FALSE;
-
-#ifndef _WIN64
-	if (m_bIsWow64Process)
-	{
-		ULARGE_INTEGER ulRing0Event;
-		ulRing0Event.HighPart = 0;
-		ulRing0Event.LowPart = (ULONG_PTR)hRing0Event;
-
-		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_ADAPTER_EVENT,
-					  &ulRing0Event,
-					  sizeof(ULARGE_INTEGER),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
-	}
-	else
-#endif //_WIN64
-	{
-		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_SET_ADAPTER_EVENT,
-					  &hRing0Event,
-					  sizeof(HANDLE),
-					  NULL,
-					  0,
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
-	}
-	
 	return bIOResult;
 }
 
-BOOL CNdisApi::NdisrdRequest ( PPACKET_OID_DATA OidData, BOOL Set ) const
+BOOL CNdisApi::SetWANEvent(HANDLE hWin32Event) const
+{
+	HANDLE			hRing0Event = NULL;
+
+	if (ms_Version.IsWindowsNTPlatform())
+	{
+		// Windows NT
+		hRing0Event = hWin32Event;
+	}
+	else
+	{
+		// Windows 9x/ME
+		HANDLE(WINAPI *pfOpenVxDHandle)(HANDLE);
+		HINSTANCE hKernel32Dll = LoadLibrary(TEXT("kernel32.dll"));
+
+		if (!hKernel32Dll)
+			return FALSE;
+
+		pfOpenVxDHandle = (HANDLE(WINAPI *)(HANDLE))GetProcAddress(hKernel32Dll, "OpenVxDHandle");
+
+		if (!pfOpenVxDHandle)
+			return FALSE;
+
+		if (hWin32Event)
+			hRing0Event = pfOpenVxDHandle(hWin32Event);
+		else
+			hRing0Event = NULL;
+
+		FreeLibrary(hKernel32Dll);
+	}
+
+	BOOL bIOResult = FALSE;
+
+#ifndef _WIN64
+	if (m_bIsWow64Process)
+	{
+		ULARGE_INTEGER ulRing0Event;
+		ulRing0Event.HighPart = 0;
+		ulRing0Event.LowPart = (ULONG_PTR)hRing0Event;
+
+		bIOResult = DeviceIoControl(
+			IOCTL_NDISRD_SET_WAN_EVENT,
+			&ulRing0Event,
+			sizeof(ULARGE_INTEGER),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
+	}
+	else
+#endif //_WIN64
+	{
+		bIOResult = DeviceIoControl(
+			IOCTL_NDISRD_SET_WAN_EVENT,
+			&hRing0Event,
+			sizeof(HANDLE),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
+	}
+
+	return bIOResult;
+}
+
+BOOL CNdisApi::SetAdapterListChangeEvent(HANDLE hWin32Event) const
+{
+	HANDLE			hRing0Event = NULL;
+
+	if (ms_Version.IsWindowsNTPlatform())
+	{
+		// Windows NT
+		hRing0Event = hWin32Event;
+	}
+	else
+	{
+		// Windows 9x/ME
+		HANDLE(WINAPI *pfOpenVxDHandle)(HANDLE);
+		HINSTANCE hKernel32Dll = LoadLibrary(TEXT("kernel32.dll"));
+
+		if (!hKernel32Dll)
+			return FALSE;
+
+		pfOpenVxDHandle = (HANDLE(WINAPI *)(HANDLE))GetProcAddress(hKernel32Dll, "OpenVxDHandle");
+
+		if (!pfOpenVxDHandle)
+			return FALSE;
+
+		if (hWin32Event)
+			hRing0Event = pfOpenVxDHandle(hWin32Event);
+		else
+			hRing0Event = NULL;
+
+		FreeLibrary(hKernel32Dll);
+	}
+
+	BOOL bIOResult = FALSE;
+
+#ifndef _WIN64
+	if (m_bIsWow64Process)
+	{
+		ULARGE_INTEGER ulRing0Event;
+		ulRing0Event.HighPart = 0;
+		ulRing0Event.LowPart = (ULONG_PTR)hRing0Event;
+
+		bIOResult = DeviceIoControl(
+			IOCTL_NDISRD_SET_ADAPTER_EVENT,
+			&ulRing0Event,
+			sizeof(ULARGE_INTEGER),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
+	}
+	else
+#endif //_WIN64
+	{
+		bIOResult = DeviceIoControl(
+			IOCTL_NDISRD_SET_ADAPTER_EVENT,
+			&hRing0Event,
+			sizeof(HANDLE),
+			NULL,
+			0,
+			NULL,   // Bytes Returned
+			NULL
+		);
+	}
+
+	return bIOResult;
+}
+
+BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 {
 	OVERLAPPED Overlap;
 	DWORD dwLength = OidData->Length;
 
 	Overlap.Offset = 0;
 	Overlap.OffsetHigh = 0;
-    Overlap.hEvent = CreateEvent (
-						NULL,
-						FALSE,
-						FALSE,
-						NULL
-						);
+	Overlap.hEvent = CreateEvent(
+		NULL,
+		FALSE,
+		FALSE,
+		NULL
+	);
 
-    if (Overlap.hEvent == NULL)
-    {
+	if (Overlap.hEvent == NULL)
+	{
 		return FALSE;
-    }
+	}
 
 	if (!ResetEvent(Overlap.hEvent))
 	{
@@ -953,40 +1073,41 @@ BOOL CNdisApi::NdisrdRequest ( PPACKET_OID_DATA OidData, BOOL Set ) const
 
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
-		PPACKET_OID_DATA_WOW64 OidData64 = (PPACKET_OID_DATA_WOW64)malloc (sizeof(PACKET_OID_DATA_WOW64) + OidData->Length - 1);
+		PPACKET_OID_DATA_WOW64 OidData64 = (PPACKET_OID_DATA_WOW64)malloc(sizeof(PACKET_OID_DATA_WOW64) + OidData->Length - 1);
 		if (OidData64)
 		{
-			OidData64->hAdapterHandle = *((ULARGE_INTEGER*)OidData->hAdapterHandle);
+			OidData64->hAdapterHandle.QuadPart = m_Handle32to64[(unsigned)OidData->hAdapterHandle].QuadPart;
 			OidData64->Oid = OidData->Oid;
 			OidData64->Length = OidData->Length;
 			if (Set)
-				memmove (OidData64->Data, OidData->Data, OidData->Length);
+				memmove(OidData64->Data, OidData->Data, OidData->Length);
 
 			bIOResult = DeviceIoControl(
-						  (DWORD) Set ? IOCTL_NDISRD_NDIS_SET_REQUEST : IOCTL_NDISRD_NDIS_GET_REQUEST,
-						  OidData64,
-						  sizeof (PACKET_OID_DATA_WOW64) - 1 + OidData->Length,
-						  OidData64,
-						  sizeof (PACKET_OID_DATA_WOW64) - 1 + OidData->Length,
-						  NULL,   // Bytes Returned
-						  &Overlap
-						  );
+				(DWORD)Set ? IOCTL_NDISRD_NDIS_SET_REQUEST : IOCTL_NDISRD_NDIS_GET_REQUEST,
+				OidData64,
+				sizeof(PACKET_OID_DATA_WOW64) - 1 + OidData->Length,
+				OidData64,
+				sizeof(PACKET_OID_DATA_WOW64) - 1 + OidData->Length,
+				NULL,   // Bytes Returned
+				&Overlap
+			);
 
-			if ((!bIOResult)&&(ERROR_IO_PENDING == GetLastError()))
-				WaitForSingleObject ( Overlap.hEvent, INFINITE );
+			if ((!bIOResult) && (ERROR_IO_PENDING == GetLastError()))
+				WaitForSingleObject(Overlap.hEvent, INFINITE);
 			else
-				if(!bIOResult)
+				if (!bIOResult)
 				{
 					::CloseHandle(Overlap.hEvent);
-					delete[] (char*)OidData64;
+					free(OidData64);
 					return FALSE;
 				}
 
 			if (!Set)
 			{
-				memmove (OidData->Data, OidData64->Data, OidData64->Length);
+				memmove(OidData->Data, OidData64->Data, OidData64->Length);
 				OidData->Length = OidData64->Length;
 			}
 
@@ -994,21 +1115,22 @@ BOOL CNdisApi::NdisrdRequest ( PPACKET_OID_DATA OidData, BOOL Set ) const
 		}
 	}
 	else
+#endif //_WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  (DWORD) Set ? IOCTL_NDISRD_NDIS_SET_REQUEST : IOCTL_NDISRD_NDIS_GET_REQUEST,
-					  OidData,
-					  sizeof (PACKET_OID_DATA) - 1 + OidData->Length,
-					  OidData,
-					  sizeof (PACKET_OID_DATA) - 1 + OidData->Length,
-                      NULL,   // Bytes Returned
-                      &Overlap
-					  );
+			(DWORD)Set ? IOCTL_NDISRD_NDIS_SET_REQUEST : IOCTL_NDISRD_NDIS_GET_REQUEST,
+			OidData,
+			sizeof(PACKET_OID_DATA) - 1 + OidData->Length,
+			OidData,
+			sizeof(PACKET_OID_DATA) - 1 + OidData->Length,
+			NULL,   // Bytes Returned
+			&Overlap
+		);
 
-		if ((!bIOResult)&&(ERROR_IO_PENDING == GetLastError()))
-			WaitForSingleObject ( Overlap.hEvent, INFINITE );
+		if ((!bIOResult) && (ERROR_IO_PENDING == GetLastError()))
+			WaitForSingleObject(Overlap.hEvent, INFINITE);
 		else
-			if(!bIOResult)
+			if (!bIOResult)
 			{
 				::CloseHandle(Overlap.hEvent);
 				return FALSE;
@@ -1023,42 +1145,47 @@ BOOL CNdisApi::NdisrdRequest ( PPACKET_OID_DATA OidData, BOOL Set ) const
 		return FALSE;
 }
 
-BOOL CNdisApi::GetRasLinks ( HANDLE hAdapter, PRAS_LINKS pLinks ) const
+BOOL CNdisApi::GetRasLinks(HANDLE hAdapter, PRAS_LINKS pLinks) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
+		ULARGE_INTEGER h64Adapter;
+		h64Adapter.QuadPart = m_Handle32to64[(unsigned)hAdapter].QuadPart;
+
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_GET_RAS_LINKS,
-					  (ULARGE_INTEGER*)hAdapter,
-					  sizeof(ULARGE_INTEGER),
-					  pLinks,
-					  sizeof(RAS_LINKS),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_GET_RAS_LINKS,
+			&h64Adapter,
+			sizeof(ULARGE_INTEGER),
+			pLinks,
+			sizeof(RAS_LINKS),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 	else
+#endif // _WIN64
 	{
 		bIOResult = DeviceIoControl(
-					  IOCTL_NDISRD_GET_RAS_LINKS,
-					  &hAdapter,
-					  sizeof(HANDLE),
-					  pLinks,
-					  sizeof(RAS_LINKS),
-                      NULL,   // Bytes Returned
-                      NULL
-					  );
+			IOCTL_NDISRD_GET_RAS_LINKS,
+			&hAdapter,
+			sizeof(HANDLE),
+			pLinks,
+			sizeof(RAS_LINKS),
+			NULL,   // Bytes Returned
+			NULL
+		);
 	}
 
 	return bIOResult;
 }
 
-BOOL CNdisApi::SetHwPacketFilter ( HANDLE hAdapter, DWORD Filter) const
+BOOL CNdisApi::SetHwPacketFilter(HANDLE hAdapter, DWORD Filter) const
 {
 	BOOL bRet = FALSE;
-	PPACKET_OID_DATA pPacket = (PPACKET_OID_DATA)malloc (sizeof(PACKET_OID_DATA) + sizeof(DWORD) - 1);
+	PPACKET_OID_DATA pPacket = (PPACKET_OID_DATA)malloc(sizeof(PACKET_OID_DATA) + sizeof(DWORD) - 1);
 
 	if (pPacket)
 	{
@@ -1067,15 +1194,15 @@ BOOL CNdisApi::SetHwPacketFilter ( HANDLE hAdapter, DWORD Filter) const
 		pPacket->hAdapterHandle = hAdapter;
 
 		*((PDWORD)pPacket->Data) = Filter;
-		bRet = NdisrdRequest (pPacket, TRUE);
+		bRet = NdisrdRequest(pPacket, TRUE);
 
 		free(pPacket);
 	}
-	
+
 	return bRet;
 }
 
-BOOL CNdisApi::GetHwPacketFilter ( HANDLE hAdapter, PDWORD pFilter) const
+BOOL CNdisApi::GetHwPacketFilter(HANDLE hAdapter, PDWORD pFilter) const
 {
 	BOOL bRet = FALSE;
 
@@ -1099,10 +1226,11 @@ BOOL CNdisApi::GetHwPacketFilter ( HANDLE hAdapter, PDWORD pFilter) const
 	return bRet;
 }
 
-BOOL CNdisApi::SetPacketFilterTable (PSTATIC_FILTER_TABLE pFilterList) const
+BOOL CNdisApi::SetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 {
 	BOOL bIOResult = FALSE;
 
+#ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
 		// Adapter handle values in the table contain values which are not valid for the driver
@@ -1110,72 +1238,73 @@ BOOL CNdisApi::SetPacketFilterTable (PSTATIC_FILTER_TABLE pFilterList) const
 
 		for (unsigned i = 0; i < pFilterList->m_TableSize; ++i)
 		{
-			if(pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
-				pFilterList->m_StaticFilters[i].m_Adapter = 
-					*((PULARGE_INTEGER)(pFilterList->m_StaticFilters[i].m_Adapter.LowPart));
+			if (pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
+				pFilterList->m_StaticFilters[i].m_Adapter.QuadPart =
+				m_Handle32to64[(unsigned)pFilterList->m_StaticFilters[i].m_Adapter.LowPart].QuadPart;
 		}
 	}
+#endif //_WIN64
 
 	bIOResult = DeviceIoControl(
-				  IOCTL_NDISRD_SET_PACKET_FILTERS,
-				  pFilterList,
-				  sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE)*sizeof(STATIC_FILTER),
-				  NULL,
-				  0,
-                  NULL,   // Bytes Returned
-                  NULL
-				  );
+		IOCTL_NDISRD_SET_PACKET_FILTERS,
+		pFilterList,
+		sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE) * sizeof(STATIC_FILTER),
+		NULL,
+		0,
+		NULL,   // Bytes Returned
+		NULL
+	);
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::ResetPacketFilterTable () const
+BOOL CNdisApi::ResetPacketFilterTable() const
 {
 	BOOL bIOResult = FALSE;
 
 	bIOResult = DeviceIoControl(
-				  IOCTL_NDISRD_RESET_PACKET_FILTERS,
-				  NULL,
-				  0,
-				  NULL,
-				  0,
-                  NULL,   // Bytes Returned
-                  NULL
-				  );
+		IOCTL_NDISRD_RESET_PACKET_FILTERS,
+		NULL,
+		0,
+		NULL,
+		0,
+		NULL,   // Bytes Returned
+		NULL
+	);
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::GetPacketFilterTableSize ( PDWORD pdwTableSize ) const
+BOOL CNdisApi::GetPacketFilterTableSize(PDWORD pdwTableSize) const
 {
 	BOOL bIOResult = FALSE;
 
 	bIOResult = DeviceIoControl(
-				  IOCTL_NDISRD_GET_PACKET_FILTERS_TABLESIZE,
-				  NULL,
-				  0,
-				  pdwTableSize,
-				  sizeof (DWORD),
-                  NULL,   // Bytes Returned
-                  NULL
-				  );
+		IOCTL_NDISRD_GET_PACKET_FILTERS_TABLESIZE,
+		NULL,
+		0,
+		pdwTableSize,
+		sizeof(DWORD),
+		NULL,   // Bytes Returned
+		NULL
+	);
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::GetPacketFilterTable ( PSTATIC_FILTER_TABLE pFilterList ) const
+BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 {
 	BOOL bIOResult = FALSE;
 
 	bIOResult = DeviceIoControl(
-				  IOCTL_NDISRD_GET_PACKET_FILTERS,
-				  NULL,
-				  0,
-				  pFilterList,
-				  sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE)*sizeof(STATIC_FILTER),
-                  NULL,   // Bytes Returned
-                  NULL
-				  );
+		IOCTL_NDISRD_GET_PACKET_FILTERS,
+		NULL,
+		0,
+		pFilterList,
+		sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE) * sizeof(STATIC_FILTER),
+		NULL,   // Bytes Returned
+		NULL
+	);
 #ifndef _WIN64
 	if (m_bIsWow64Process)
 	{
@@ -1188,8 +1317,15 @@ BOOL CNdisApi::GetPacketFilterTable ( PSTATIC_FILTER_TABLE pFilterList ) const
 			{
 				if (m_AdaptersList.m_nAdapterHandle[j].QuadPart == pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
 				{
-					pFilterList->m_StaticFilters[i].m_Adapter.HighPart = 0;
-					pFilterList->m_StaticFilters[i].m_Adapter.LowPart = (ULONG_PTR)&m_AdaptersList.m_nAdapterHandle[j];
+					// Adapter found
+					for (int k = 1; k < ADAPTER_LIST_SIZE + 1; k++)
+					{
+						if (m_Handle32to64[k].QuadPart == m_AdaptersList.m_nAdapterHandle[j].QuadPart)
+						{
+							pFilterList->m_StaticFilters[i].m_Adapter.QuadPart = k;
+							break;
+						}
+					}
 					break;
 				}
 			}
@@ -1197,22 +1333,22 @@ BOOL CNdisApi::GetPacketFilterTable ( PSTATIC_FILTER_TABLE pFilterList ) const
 	}
 #endif //_WIN64
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList ) const
+BOOL CNdisApi::GetPacketFilterTableResetStats(PSTATIC_FILTER_TABLE pFilterList) const
 {
 	BOOL bIOResult = FALSE;
 
 	bIOResult = DeviceIoControl(
-				  IOCTL_NDISRD_GET_PACKET_FILTERS_RESET_STATS,
-				  NULL,
-				  0,
-				  pFilterList,
-				  sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE)*sizeof(STATIC_FILTER),
-                  NULL,   // Bytes Returned
-                  NULL
-				  );
+		IOCTL_NDISRD_GET_PACKET_FILTERS_RESET_STATS,
+		NULL,
+		0,
+		pFilterList,
+		sizeof(STATIC_FILTER_TABLE) + (pFilterList->m_TableSize - ANY_SIZE) * sizeof(STATIC_FILTER),
+		NULL,   // Bytes Returned
+		NULL
+	);
 
 #ifndef _WIN64
 	if (m_bIsWow64Process)
@@ -1226,8 +1362,15 @@ BOOL CNdisApi::GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList
 			{
 				if (m_AdaptersList.m_nAdapterHandle[j].QuadPart == pFilterList->m_StaticFilters[i].m_Adapter.QuadPart)
 				{
-					pFilterList->m_StaticFilters[i].m_Adapter.HighPart = 0;
-					pFilterList->m_StaticFilters[i].m_Adapter.LowPart = (ULONG_PTR)&m_AdaptersList.m_nAdapterHandle[j];
+					// Adapter found
+					for (int k = 1; k < ADAPTER_LIST_SIZE + 1; k++)
+					{
+						if (m_Handle32to64[k].QuadPart == m_AdaptersList.m_nAdapterHandle[j].QuadPart)
+						{
+							pFilterList->m_StaticFilters[i].m_Adapter.QuadPart = k;
+							break;
+						}
+					}
 					break;
 				}
 			}
@@ -1235,34 +1378,29 @@ BOOL CNdisApi::GetPacketFilterTableResetStats ( PSTATIC_FILTER_TABLE pFilterList
 	}
 #endif //_WIN64
 
-	 return bIOResult;
+	return bIOResult;
 }
 
-BOOL CNdisApi::IsDriverLoaded () const
+BOOL CNdisApi::IsDriverLoaded() const
 {
 	return m_bIsLoadSuccessfully;
 }
 
-DWORD CNdisApi::GetBytesReturned () const
+DWORD CNdisApi::GetBytesReturned() const
 {
 	return m_BytesReturned;
 }
 
 BOOL CNdisApi::SetMTUDecrement(DWORD dwMTUDecrement)
 {
-	OSVERSIONINFO osVer;
 	HKEY hKey;
 
-	osVer.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
-
-	GetVersionEx ( &osVer );
-
-	if (osVer.dwPlatformId == VER_PLATFORM_WIN32_NT)
+	if (ms_Version.IsWindowsNTPlatform())
 	{
 		// Windows NT, 2000 or XP
-		if (ERROR_SUCCESS == RegCreateKey (HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegSetValueEx (hKey, TEXT("MTUDecrement"), NULL, REG_DWORD, (CONST BYTE*)&dwMTUDecrement, sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("MTUDecrement"), NULL, REG_DWORD, (CONST BYTE*)&dwMTUDecrement, sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -1279,9 +1417,9 @@ BOOL CNdisApi::SetMTUDecrement(DWORD dwMTUDecrement)
 	else
 	{
 		// Windows 9x/ME
-		if (ERROR_SUCCESS == RegCreateKeyA (HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegSetValueEx (hKey, TEXT("MTUDecrement"), NULL, REG_DWORD, (CONST BYTE*)&dwMTUDecrement, sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("MTUDecrement"), NULL, REG_DWORD, (CONST BYTE*)&dwMTUDecrement, sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -1297,23 +1435,18 @@ BOOL CNdisApi::SetMTUDecrement(DWORD dwMTUDecrement)
 	}
 }
 
-DWORD CNdisApi::GetMTUDecrement ()
+DWORD CNdisApi::GetMTUDecrement()
 {
-	OSVERSIONINFO osVer;
 	HKEY hKey;
 	DWORD dwMTUDecrement;
 	DWORD dwSize = sizeof(DWORD);
 
-	osVer.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
-
-	GetVersionEx ( &osVer );
-
-	if (osVer.dwPlatformId == VER_PLATFORM_WIN32_NT)
+	if (ms_Version.IsWindowsNTPlatform())
 	{
 		// Windows NT, 2000 or XP
-		if (ERROR_SUCCESS == RegCreateKey (HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegQueryValueEx (hKey, TEXT("MTUDecrement"), NULL, NULL, (BYTE*)&dwMTUDecrement, &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("MTUDecrement"), NULL, NULL, (BYTE*)&dwMTUDecrement, &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwMTUDecrement;
@@ -1330,9 +1463,9 @@ DWORD CNdisApi::GetMTUDecrement ()
 	else
 	{
 		// Windows 9x/ME
-		if (ERROR_SUCCESS == RegCreateKeyA (HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegQueryValueEx (hKey, TEXT("MTUDecrement"), NULL, NULL, (BYTE*)&dwMTUDecrement, &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("MTUDecrement"), NULL, NULL, (BYTE*)&dwMTUDecrement, &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwMTUDecrement;
@@ -1351,19 +1484,14 @@ DWORD CNdisApi::GetMTUDecrement ()
 
 BOOL CNdisApi::SetAdaptersStartupMode(DWORD dwStartupMode)
 {
-	OSVERSIONINFO osVer;
 	HKEY hKey;
 
-	osVer.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
-
-	GetVersionEx ( &osVer );
-
-	if (osVer.dwPlatformId == VER_PLATFORM_WIN32_NT)
+	if (ms_Version.IsWindowsNTPlatform())
 	{
 		// Windows NT, 2000 or XP
-		if (ERROR_SUCCESS == RegCreateKey (HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegSetValueEx (hKey, TEXT("StartupMode"), NULL, REG_DWORD, (CONST BYTE*)&dwStartupMode, sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("StartupMode"), NULL, REG_DWORD, (CONST BYTE*)&dwStartupMode, sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -1380,9 +1508,9 @@ BOOL CNdisApi::SetAdaptersStartupMode(DWORD dwStartupMode)
 	else
 	{
 		// Windows 9x/ME
-		if (ERROR_SUCCESS == RegCreateKeyA (HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegSetValueEx (hKey, TEXT("StartupMode"), NULL, REG_DWORD, (CONST BYTE*)&dwStartupMode, sizeof(DWORD)))
+			if (ERROR_SUCCESS == RegSetValueEx(hKey, TEXT("StartupMode"), NULL, REG_DWORD, (CONST BYTE*)&dwStartupMode, sizeof(DWORD)))
 			{
 				RegCloseKey(hKey);
 				return TRUE;
@@ -1398,23 +1526,18 @@ BOOL CNdisApi::SetAdaptersStartupMode(DWORD dwStartupMode)
 	}
 }
 
-DWORD CNdisApi::GetAdaptersStartupMode ()
+DWORD CNdisApi::GetAdaptersStartupMode()
 {
-	OSVERSIONINFO osVer;
 	HKEY hKey;
 	DWORD dwStartupMode;
 	DWORD dwSize = sizeof(DWORD);
 
-	osVer.dwOSVersionInfoSize = sizeof (OSVERSIONINFO);
-
-	GetVersionEx ( &osVer );
-
-	if (osVer.dwPlatformId == VER_PLATFORM_WIN32_NT)
+	if (ms_Version.IsWindowsNTPlatform())
 	{
 		// Windows NT, 2000 or XP
-		if (ERROR_SUCCESS == RegCreateKey (HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKey(HKEY_LOCAL_MACHINE, WINNT_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegQueryValueEx (hKey, TEXT("StartupMode"), NULL, NULL, (BYTE*)&dwStartupMode, &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("StartupMode"), NULL, NULL, (BYTE*)&dwStartupMode, &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwStartupMode;
@@ -1431,9 +1554,9 @@ DWORD CNdisApi::GetAdaptersStartupMode ()
 	else
 	{
 		// Windows 9x/ME
-		if (ERROR_SUCCESS == RegCreateKeyA (HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
+		if (ERROR_SUCCESS == RegCreateKeyA(HKEY_LOCAL_MACHINE, WIN9X_REG_PARAM, &hKey))
 		{
-			if( ERROR_SUCCESS == RegQueryValueEx (hKey, TEXT("StartupMode"), NULL, NULL, (BYTE*)&dwStartupMode, &dwSize))
+			if (ERROR_SUCCESS == RegQueryValueEx(hKey, TEXT("StartupMode"), NULL, NULL, (BYTE*)&dwStartupMode, &dwSize))
 			{
 				RegCloseKey(hKey);
 				return dwStartupMode;
@@ -1450,28 +1573,149 @@ DWORD CNdisApi::GetAdaptersStartupMode ()
 
 }
 
+//Enumerate all subkeys of HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}
+//and look for the componentid = ms_ndiswanip, and then grab the linkage subkey and the export string it seems to work for
+//at least both windows 7 and windows 10.
+// Possible componentid values:
+// ms_ndiswanip
+// ms_ndiswanipv6
+// ms_ndiswanbh
+BOOL CNdisApi::IsNdiswanInterface(LPCSTR adapterName, LPCSTR ndiswanName)
+{
+	LONG	lStatus = ERROR_SUCCESS;
+	HKEY    TargetKey = NULL;
+	HKEY    ConnectionKey = NULL;
+	HKEY	LinkageKey = NULL;
+	int		i = 0;
+	TCHAR	Buffer[MAX_PATH] = { 0 };
+	char	TempBuffer[MAX_PATH] = { 0 };
+	DWORD	BufferLength = MAX_PATH;
+	DWORD	TempBufferLength = MAX_PATH;
+	DWORD	RegType = 0;
+	bool	bRetVal = FALSE;
+
+	lStatus = RegOpenKeyEx(
+		HKEY_LOCAL_MACHINE,
+		REGSTR_NETWORK_CONTROL_CLASS,
+		0,
+		KEY_READ,
+		&TargetKey
+	);
+
+	if (lStatus == ERROR_SUCCESS)
+	{
+		while ((ERROR_NO_MORE_ITEMS != RegEnumKeyEx(TargetKey, i, Buffer, &BufferLength, 0, 0, 0, 0)) && (!bRetVal))
+		{
+			lStatus = RegOpenKeyEx(TargetKey, Buffer, 0, KEY_READ, &ConnectionKey);
+			if (lStatus == ERROR_SUCCESS)
+			{
+				lStatus = RegQueryValueExA(ConnectionKey, "ComponentId", 0, &RegType, (LPBYTE)TempBuffer, &TempBufferLength);
+				TempBufferLength = MAX_PATH;
+
+				if (lStatus == ERROR_SUCCESS)
+				{
+					if (0 == _stricmp(TempBuffer, ndiswanName))
+					{
+						lStatus = RegOpenKeyEx(ConnectionKey, TEXT("Linkage"), 0, KEY_READ, &LinkageKey);
+						if (lStatus == ERROR_SUCCESS)
+						{
+							lStatus = RegQueryValueExA(LinkageKey, "Export", 0, &RegType, (LPBYTE)TempBuffer, &TempBufferLength);
+							TempBufferLength = MAX_PATH;
+
+							if (lStatus == ERROR_SUCCESS)
+							{
+								if (0 == _stricmp(TempBuffer, adapterName))
+								{
+									bRetVal = TRUE;
+								}
+							}
+							RegCloseKey(LinkageKey);
+						}
+					}
+				}
+				RegCloseKey(ConnectionKey);
+			}
+			i++;
+			BufferLength = MAX_PATH;
+		}
+
+		RegCloseKey(TargetKey);
+	}
+
+	return bRetVal;
+}
+
+BOOL CNdisApi::IsNdiswanIp(LPCSTR adapterName)
+{
+	//
+	// Before Windows 10 NDISWANIP can be identified bt internal name
+	//
+	if (!ms_Version.IsWindows10OrGreater() /*before Windows 10*/)
+	{
+		if (_stricmp(adapterName, DEVICE_NDISWANIP) == 0)
+		{
+			return TRUE;
+		}
+	}
+
+	return IsNdiswanInterface(adapterName, REGSTR_COMPONENTID_NDISWANIP);
+}
+
+BOOL CNdisApi::IsNdiswanIpv6(LPCSTR adapterName)
+{
+	//
+	// Before Windows 10 NDISWANIPV6 can be identified bt internal name
+	//
+	if (!ms_Version.IsWindows10OrGreater() /*before Windows 10*/)
+	{
+		if (_stricmp(adapterName, DEVICE_NDISWANIPV6) == 0)
+		{
+			return TRUE;
+		}
+	}
+
+	return IsNdiswanInterface(adapterName, REGSTR_COMPONENTID_NDISWANIPV6);
+}
+
+BOOL CNdisApi::IsNdiswanBh(LPCSTR adapterName)
+{
+	//
+	// Before Windows 10 NDISWANBH can be identified bt internal name
+	//
+	if (!ms_Version.IsWindows10OrGreater() /*before Windows 10*/)
+	{
+		if (_stricmp(adapterName, DEVICE_NDISWANBH) == 0)
+		{
+			return TRUE;
+		}
+	}
+
+	return IsNdiswanInterface(adapterName, REGSTR_COMPONENTID_NDISWANBH);
+}
+
+
 BOOL
-	CNdisApi::ConvertWindowsNTAdapterName (
-		LPCSTR szAdapterName,
-		LPSTR szUserFriendlyName,
-		DWORD dwUserFriendlyNameLength
-		)
+CNdisApi::ConvertWindowsNTAdapterName(
+	LPCSTR szAdapterName,
+	LPSTR szUserFriendlyName,
+	DWORD dwUserFriendlyNameLength
+)
 {
 	HKEY		hKeyAdapters, hKeyAdapter;
 	DWORD		dwType, dwIndex = 0;
 	FILETIME	time;
-	char		szSubKey[MAX_PATH*2], szServiceName[MAX_PATH*2];
-	DWORD		dwSubKeyLength = MAX_PATH*2;
-	DWORD		dwServiceNameLength = MAX_PATH*2;
+	char		szSubKey[MAX_PATH * 2], szServiceName[MAX_PATH * 2];
+	DWORD		dwSubKeyLength = MAX_PATH * 2;
+	DWORD		dwServiceNameLength = MAX_PATH * 2;
 	BOOL		bRet = TRUE;
-				
-	LONG lResult = RegOpenKeyEx (
-						HKEY_LOCAL_MACHINE,
-						REGSTR_NETWORK_CARDS,
-						0,
-						KEY_READ,
-						&hKeyAdapters
-						);
+
+	LONG lResult = RegOpenKeyEx(
+		HKEY_LOCAL_MACHINE,
+		REGSTR_NETWORK_CARDS,
+		0,
+		KEY_READ,
+		&hKeyAdapters
+	);
 
 	if (lResult == ERROR_SUCCESS)
 	{
@@ -1479,25 +1723,25 @@ BOOL
 		while (RegEnumKeyExA(hKeyAdapters, dwIndex, szSubKey, &dwSubKeyLength, NULL, NULL, NULL, &time) == ERROR_SUCCESS)
 		{
 			// Subkey retrieved, open subkey
-			lResult = RegOpenKeyExA (
-						hKeyAdapters,
-						szSubKey,
-						0,
-						KEY_READ,
-						&hKeyAdapter
-						);
+			lResult = RegOpenKeyExA(
+				hKeyAdapters,
+				szSubKey,
+				0,
+				KEY_READ,
+				&hKeyAdapter
+			);
 
 			if (lResult == ERROR_SUCCESS)
 			{
 				lResult = RegQueryValueExA(hKeyAdapter, REGSTR_VAL_SERVICE_NAME, NULL, &dwType, (LPBYTE)szServiceName, &dwServiceNameLength);
 				if (lResult == ERROR_SUCCESS)
-				{			
-					if (_stricmp (szServiceName, &szAdapterName[strlen("\\Device\\")]) == 0)
+				{
+					if (_stricmp(szServiceName, &szAdapterName[strlen("\\Device\\")]) == 0)
 					{
-						lResult = RegQueryValueExA(hKeyAdapter, REGSTR_VAL_TITLE, NULL, &dwType, (LPBYTE)szUserFriendlyName, &dwUserFriendlyNameLength);		
+						lResult = RegQueryValueExA(hKeyAdapter, REGSTR_VAL_TITLE, NULL, &dwType, (LPBYTE)szUserFriendlyName, &dwUserFriendlyNameLength);
 
-						RegCloseKey (hKeyAdapter);
-						RegCloseKey (hKeyAdapters);
+						RegCloseKey(hKeyAdapter);
+						RegCloseKey(hKeyAdapters);
 
 						if (lResult == ERROR_SUCCESS)
 						{
@@ -1513,8 +1757,8 @@ BOOL
 				{
 					bRet = FALSE;
 				}
-				RegCloseKey (hKeyAdapter);
-				dwServiceNameLength = MAX_PATH*2;
+				RegCloseKey(hKeyAdapter);
+				dwServiceNameLength = MAX_PATH * 2;
 			}
 			else
 			{
@@ -1524,8 +1768,8 @@ BOOL
 			dwIndex++;
 			dwSubKeyLength = MAX_PATH;
 		}
-		
-		RegCloseKey (hKeyAdapters);
+
+		RegCloseKey(hKeyAdapters);
 
 	}
 	else
@@ -1537,50 +1781,76 @@ BOOL
 }
 
 BOOL
-	CNdisApi::ConvertWindows2000AdapterName (
-		LPCSTR szAdapterName,
-		LPSTR szUserFriendlyName,
-		DWORD dwUserFriendlyNameLength
-		)
+CNdisApi::ConvertWindows2000AdapterName(
+	LPCSTR szAdapterName,
+	LPSTR szUserFriendlyName,
+	DWORD dwUserFriendlyNameLength
+)
 {
 	HKEY		hKey;
-	char		szFriendlyNameKey[MAX_PATH*2];
+	char		szFriendlyNameKey[MAX_PATH * 2];
 	DWORD		dwType;
 
-	if (_stricmp(szAdapterName, DEVICE_NDISWANIP) == 0)
+#if _MSC_VER >= 1700
+	if (IsNdiswanIp(szAdapterName))
 	{
-		strcpy_s (szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANIP);
+		strcpy_s(szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANIP);
 		return TRUE;
 	}
 
-	if (_stricmp(szAdapterName, DEVICE_NDISWANBH) == 0)
+	if (IsNdiswanBh(szAdapterName))
 	{
-		strcpy_s (szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANBH);
+		strcpy_s(szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANBH);
 		return TRUE;
 	}
 
-	if (_stricmp(szAdapterName, DEVICE_NDISWANIPV6) == 0)
+	if (IsNdiswanIpv6(szAdapterName))
 	{
-		strcpy_s (szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANIPV6);
+		strcpy_s(szUserFriendlyName, dwUserFriendlyNameLength, USER_NDISWANIPV6);
 		return TRUE;
 	}
 
-	strcpy_s (szFriendlyNameKey, MAX_PATH * 2, REGSTR_NETWORK_CONTROL_KEY);
-	strcpy_s ((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
-	strcpy_s ((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
+	strcpy_s(szFriendlyNameKey, MAX_PATH * 2, REGSTR_NETWORK_CONTROL_KEY);
+	strcpy_s((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
+	strcpy_s((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
+#else
+	if (IsNdiswanIp(szAdapterName))
+	{
+		strcpy(szUserFriendlyName, USER_NDISWANIP);
+		return TRUE;
+	}
 
-	LONG lResult = RegOpenKeyExA (
-						HKEY_LOCAL_MACHINE,
-						szFriendlyNameKey,
-						0,
-						KEY_READ,
-						&hKey
-						);
+	if (IsNdiswanBh(szAdapterName))
+	{
+		strcpy(szUserFriendlyName, USER_NDISWANBH);
+		return TRUE;
+	}
+
+	if (IsNdiswanIpv6(szAdapterName))
+	{
+		strcpy(szUserFriendlyName, USER_NDISWANIPV6);
+		return TRUE;
+	}
+
+	strcpy(szFriendlyNameKey, REGSTR_NETWORK_CONTROL_KEY);
+	strcpy((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
+	strcpy((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
+
+#endif //_MSC_VER >= 1700
+
+
+	LONG lResult = RegOpenKeyExA(
+		HKEY_LOCAL_MACHINE,
+		szFriendlyNameKey,
+		0,
+		KEY_READ,
+		&hKey
+	);
 
 	if (lResult == ERROR_SUCCESS)
 	{
 		lResult = RegQueryValueExA(hKey, REGSTR_VAL_NAME, NULL, &dwType, (LPBYTE)szUserFriendlyName, &dwUserFriendlyNameLength);
-							
+
 		RegCloseKey(hKey);
 	}
 	else
@@ -1592,27 +1862,32 @@ BOOL
 }
 
 BOOL
-	CNdisApi::ConvertWindows9xAdapterName (
-		LPCSTR szAdapterName,
-		LPSTR szUserFriendlyName,
-		DWORD dwUserFriendlyNameLength
-		)
+CNdisApi::ConvertWindows9xAdapterName(
+	LPCSTR szAdapterName,
+	LPSTR szUserFriendlyName,
+	DWORD dwUserFriendlyNameLength
+)
 {
 	HKEY		hKey;
-	char		szFriendlyNameKey[MAX_PATH*2];
+	char		szFriendlyNameKey[MAX_PATH * 2];
 	DWORD		dwType;
 	BOOL		bRet = TRUE;
 
-	strcpy_s (szFriendlyNameKey, MAX_PATH * 2, REGSTR_MSTCP_CLASS_NET);
-	strcpy_s ((PCHAR)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), szAdapterName);
+#if _MSC_VER >= 1700
+	strcpy_s(szFriendlyNameKey, MAX_PATH * 2, REGSTR_MSTCP_CLASS_NET);
+	strcpy_s((PCHAR)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), szAdapterName);
+#else
+	strcpy(szFriendlyNameKey, REGSTR_MSTCP_CLASS_NET);
+	strcpy((PCHAR)szFriendlyNameKey + strlen(szFriendlyNameKey), szAdapterName);
+#endif //_MSC_VER >= 1700
 
-	LONG lResult = RegOpenKeyExA (
-					HKEY_LOCAL_MACHINE,
-					szFriendlyNameKey,
-					0,
-					KEY_READ,
-					&hKey
-					);
+	LONG lResult = RegOpenKeyExA(
+		HKEY_LOCAL_MACHINE,
+		szFriendlyNameKey,
+		0,
+		KEY_READ,
+		&hKey
+	);
 
 	if (lResult == ERROR_SUCCESS)
 	{
@@ -1629,60 +1904,6 @@ BOOL
 	}
 
 	return bRet;
-}
-
-BOOL
-CNdisApi::IsNdisWanIp(
-	LPCSTR szAdapterName
-)
-{
-	HKEY		hKey;
-	char		szFriendlyNameKey[MAX_PATH * 2];
-	char		szPnPInstanceId[MAX_PATH * 2];
-	DWORD		dwType;
-	DWORD		PnPInstanceIdSize = MAX_PATH * 2;
-	
-	//
-	// Before Windows 10 NDISWANIP can be identified bt internal name
-	//
-	if (ms_Version.dwMajorVersion < 10 /*before Windows 10*/)
-	{
-		if (_stricmp(szAdapterName, DEVICE_NDISWANIP) == 0)
-		{
-			return TRUE;
-		}
-	}
-	
-	//
-	// Starting Windows 10 NDISWANIP is hidden behind GUID, so need identify it
-	//
-	strcpy_s(szFriendlyNameKey, MAX_PATH * 2, REGSTR_NETWORK_CONTROL_KEY);
-	strcpy_s((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), &szAdapterName[strlen("\\Device\\")]);
-	strcpy_s((char*)szFriendlyNameKey + strlen(szFriendlyNameKey), MAX_PATH * 2 - strlen(szFriendlyNameKey), REGSTR_VAL_CONNECTION);
-
-	LONG lResult = RegOpenKeyExA(
-		HKEY_LOCAL_MACHINE,
-		szFriendlyNameKey,
-		0,
-		KEY_READ,
-		&hKey
-	);
-
-	if (lResult == ERROR_SUCCESS)
-	{
-		lResult = RegQueryValueExA(hKey, REGSTR_VAL_PNPINSTANCEID, NULL, &dwType, (LPBYTE)szPnPInstanceId, &PnPInstanceIdSize);
-
-		RegCloseKey(hKey);
-	}
-	else
-	{
-		return FALSE;
-	}
-
-	if (strcmp(szPnPInstanceId, "SWD\\MSRRAS\\MS_NDISWANIP") == 0)
-		return TRUE;
-	else
-		return FALSE;
 }
 
 //
@@ -1894,379 +2115,392 @@ CNdisApi::RecalculateUDPChecksum(
 	pUdpHeader->th_sum = ntohs((unsigned short)sum);
 }
 
-
-HANDLE __stdcall OpenFilterDriver ( const TCHAR* pszFileName )
+HANDLE __stdcall OpenFilterDriver(const TCHAR* pszFileName)
 {
-	return (HANDLE)(new CNdisApi (pszFileName));
+	return (HANDLE)(new CNdisApi(pszFileName));
 }
- 
-VOID __stdcall CloseFilterDriver ( HANDLE hOpen )
+
+VOID __stdcall CloseFilterDriver(HANDLE hOpen)
 {
 	delete (CNdisApi*)hOpen;
 }
 
-DWORD __stdcall GetDriverVersion ( HANDLE hOpen )
+DWORD __stdcall GetDriverVersion(HANDLE hOpen)
 {
 	if (!hOpen)
 		return 0;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-	
-	return pApi->GetVersion ();
+
+	return pApi->GetVersion();
 }
 
-BOOL __stdcall GetTcpipBoundAdaptersInfo ( HANDLE hOpen, PTCP_AdapterList pAdapters )
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
-
-	return pApi->GetTcpipBoundAdaptersInfo ( pAdapters );
-}
-
-BOOL __stdcall SendPacketToMstcp ( HANDLE hOpen, PETH_REQUEST pPacket )
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
-
-	return pApi->SendPacketToMstcp ( pPacket );
-}
-
-BOOL __stdcall SendPacketToAdapter ( HANDLE hOpen, PETH_REQUEST pPacket )
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
-
-	return pApi->SendPacketToAdapter ( pPacket );
-}
-
-BOOL __stdcall ReadPacket ( HANDLE hOpen, PETH_REQUEST pPacket )
+BOOL __stdcall GetTcpipBoundAdaptersInfo(HANDLE hOpen, PTCP_AdapterList pAdapters)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->ReadPacket ( pPacket );
+	return pApi->GetTcpipBoundAdaptersInfo(pAdapters);
 }
 
-BOOL __stdcall SendPacketsToMstcp ( HANDLE hOpen, PETH_M_REQUEST pPackets )
+BOOL __stdcall SendPacketToMstcp(HANDLE hOpen, PETH_REQUEST pPacket)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->SendPacketsToMstcp ( pPackets );
+	return pApi->SendPacketToMstcp(pPacket);
 }
 
-BOOL __stdcall SendPacketsToAdapter ( HANDLE hOpen, PETH_M_REQUEST pPackets )
+BOOL __stdcall SendPacketToAdapter(HANDLE hOpen, PETH_REQUEST pPacket)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->SendPacketsToAdapter ( pPackets );
+	return pApi->SendPacketToAdapter(pPacket);
 }
 
-BOOL __stdcall ReadPackets ( HANDLE hOpen, PETH_M_REQUEST pPackets )
+BOOL __stdcall ReadPacket(HANDLE hOpen, PETH_REQUEST pPacket)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->ReadPackets ( pPackets );
+	return pApi->ReadPacket(pPacket);
 }
 
-BOOL __stdcall SetAdapterMode ( HANDLE hOpen, PADAPTER_MODE pMode )
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
-
-	return pApi->SetAdapterMode ( pMode );
-}
-
-BOOL __stdcall GetAdapterMode ( HANDLE hOpen, PADAPTER_MODE pMode )
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
-
-	return pApi->GetAdapterMode ( pMode );
-}
-
-BOOL __stdcall FlushAdapterPacketQueue ( HANDLE hOpen, HANDLE hAdapter )
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
-	
-	return pApi->FlushAdapterPacketQueue ( hAdapter );
-}
-
-BOOL __stdcall GetAdapterPacketQueueSize ( HANDLE hOpen, HANDLE hAdapter , PDWORD pdwSize)
-
+BOOL __stdcall SendPacketsToMstcp(HANDLE hOpen, PETH_M_REQUEST pPackets)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetAdapterPacketQueueSize ( hAdapter, pdwSize ); 
+	return pApi->SendPacketsToMstcp(pPackets);
 }
 
-BOOL __stdcall SetPacketEvent ( HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event )
+BOOL __stdcall SendPacketsToAdapter(HANDLE hOpen, PETH_M_REQUEST pPackets)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-	
-	return pApi->SetPacketEvent ( hAdapter, hWin32Event );
+
+	return pApi->SendPacketsToAdapter(pPackets);
 }
 
-BOOL __stdcall SetWANEvent ( HANDLE hOpen, HANDLE hWin32Event )
+BOOL __stdcall ReadPackets(HANDLE hOpen, PETH_M_REQUEST pPackets)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-	
-	return pApi->SetWANEvent ( hWin32Event );
+
+	return pApi->ReadPackets(pPackets);
 }
 
-BOOL __stdcall SetAdapterListChangeEvent ( HANDLE hOpen, HANDLE hWin32Event )
+BOOL __stdcall SetAdapterMode(HANDLE hOpen, PADAPTER_MODE pMode)
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-	
-	return pApi->SetAdapterListChangeEvent ( hWin32Event );
+
+	return pApi->SetAdapterMode(pMode);
 }
 
-BOOL __stdcall NdisrdRequest ( HANDLE hOpen, PPACKET_OID_DATA OidData, BOOL Set )
+BOOL __stdcall GetAdapterMode(HANDLE hOpen, PADAPTER_MODE pMode)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->NdisrdRequest ( OidData, Set );
+	return pApi->GetAdapterMode(pMode);
 }
 
-BOOL __stdcall GetRasLinks ( HANDLE hOpen, HANDLE hAdapter, PRAS_LINKS pLinks )
+BOOL __stdcall FlushAdapterPacketQueue(HANDLE hOpen, HANDLE hAdapter)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetRasLinks ( hAdapter, pLinks );
+	return pApi->FlushAdapterPacketQueue(hAdapter);
 }
 
-BOOL __stdcall SetHwPacketFilter ( HANDLE hOpen, HANDLE hAdapter, DWORD Filter )
+BOOL __stdcall GetAdapterPacketQueueSize(HANDLE hOpen, HANDLE hAdapter, PDWORD pdwSize)
+
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->SetHwPacketFilter ( hAdapter, Filter );
+	return pApi->GetAdapterPacketQueueSize(hAdapter, pdwSize);
 }
 
-BOOL __stdcall GetHwPacketFilter ( HANDLE hOpen, HANDLE hAdapter, PDWORD pFilter )
+BOOL __stdcall SetPacketEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetHwPacketFilter ( hAdapter, pFilter );
+	return pApi->SetPacketEvent(hAdapter, hWin32Event);
 }
 
-
-BOOL __stdcall SetPacketFilterTable ( HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList )
+BOOL __stdcall SetWANEvent(HANDLE hOpen, HANDLE hWin32Event)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->SetPacketFilterTable (pFilterList);
+	return pApi->SetWANEvent(hWin32Event);
 }
 
-BOOL __stdcall ResetPacketFilterTable ( HANDLE hOpen )
+BOOL __stdcall SetAdapterListChangeEvent(HANDLE hOpen, HANDLE hWin32Event)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->ResetPacketFilterTable ();
+	return pApi->SetAdapterListChangeEvent(hWin32Event);
 }
 
-BOOL __stdcall GetPacketFilterTableSize ( HANDLE hOpen, PDWORD pdwTableSize )
+BOOL __stdcall NdisrdRequest(HANDLE hOpen, PPACKET_OID_DATA OidData, BOOL Set)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetPacketFilterTableSize (pdwTableSize);
+	return pApi->NdisrdRequest(OidData, Set);
 }
 
-BOOL __stdcall GetPacketFilterTable ( HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList )
+BOOL __stdcall GetRasLinks(HANDLE hOpen, HANDLE hAdapter, PRAS_LINKS pLinks)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetPacketFilterTable (pFilterList);
+	return pApi->GetRasLinks(hAdapter, pLinks);
 }
 
-BOOL __stdcall GetPacketFilterTableResetStats ( HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList )
+BOOL __stdcall SetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, DWORD Filter)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetPacketFilterTableResetStats (pFilterList);
+	return pApi->SetHwPacketFilter(hAdapter, Filter);
 }
 
-BOOL __stdcall SetMTUDecrement ( DWORD dwMTUDecrement )
-{
-	return CNdisApi::SetMTUDecrement ( dwMTUDecrement );
-}
-
-DWORD __stdcall GetMTUDecrement ()
-{
-	return CNdisApi::GetMTUDecrement();	
-}
-
-BOOL __stdcall SetAdaptersStartupMode ( DWORD dwStartupMode )
-{
-	return CNdisApi::SetAdaptersStartupMode ( dwStartupMode );
-}
-
-DWORD __stdcall GetAdaptersStartupMode ()
-{
-	return CNdisApi::GetAdaptersStartupMode();	
-}
-
-BOOL __stdcall IsDriverLoaded ( HANDLE hOpen )
+BOOL __stdcall GetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, PDWORD pFilter)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->GetHwPacketFilter(hAdapter, pFilter);
+}
+
+
+BOOL __stdcall SetPacketFilterTable(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->SetPacketFilterTable(pFilterList);
+}
+
+BOOL __stdcall ResetPacketFilterTable(HANDLE hOpen)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->ResetPacketFilterTable();
+}
+
+BOOL __stdcall GetPacketFilterTableSize(HANDLE hOpen, PDWORD pdwTableSize)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->GetPacketFilterTableSize(pdwTableSize);
+}
+
+BOOL __stdcall GetPacketFilterTable(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->GetPacketFilterTable(pFilterList);
+}
+
+BOOL __stdcall GetPacketFilterTableResetStats(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
+
+	return pApi->GetPacketFilterTableResetStats(pFilterList);
+}
+
+BOOL __stdcall SetMTUDecrement(DWORD dwMTUDecrement)
+{
+	return CNdisApi::SetMTUDecrement(dwMTUDecrement);
+}
+
+DWORD __stdcall GetMTUDecrement()
+{
+	return CNdisApi::GetMTUDecrement();
+}
+
+BOOL __stdcall SetAdaptersStartupMode(DWORD dwStartupMode)
+{
+	return CNdisApi::SetAdaptersStartupMode(dwStartupMode);
+}
+
+DWORD __stdcall GetAdaptersStartupMode()
+{
+	return CNdisApi::GetAdaptersStartupMode();
+}
+
+BOOL __stdcall IsDriverLoaded(HANDLE hOpen)
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
 	return pApi->IsDriverLoaded();
 }
 
-DWORD __stdcall GetBytesReturned ( HANDLE hOpen )
+DWORD __stdcall GetBytesReturned(HANDLE hOpen)
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetBytesReturned ();
+	return pApi->GetBytesReturned();
 }
 
-// Helper routines
-BOOL
-	__stdcall
-		ConvertWindowsNTAdapterName (
-			LPCSTR szAdapterName,
-			LPSTR szUserFriendlyName,
-			DWORD dwUserFriendlyNameLength
-			)
+BOOL __stdcall IsNdiswanIp(LPCSTR adapterName)
 {
-	return CNdisApi::ConvertWindowsNTAdapterName (
-						szAdapterName,
-						szUserFriendlyName,
-						dwUserFriendlyNameLength
-						);
+	return CNdisApi::IsNdiswanIp(adapterName);
 }
 
-
-BOOL
-	__stdcall 
-		ConvertWindows2000AdapterName (
-			LPCSTR szAdapterName,
-			LPSTR szUserFriendlyName,
-			DWORD dwUserFriendlyNameLength
-			)
+BOOL __stdcall IsNdiswanIpv6(LPCSTR adapterName)
 {
-	return CNdisApi::ConvertWindows2000AdapterName (
-						szAdapterName,
-						szUserFriendlyName,
-						dwUserFriendlyNameLength
-						);
+	return CNdisApi::IsNdiswanIpv6(adapterName);
+}
+
+BOOL __stdcall IsNdiswanBh(LPCSTR adapterName)
+{
+	return CNdisApi::IsNdiswanBh(adapterName);
 }
 
 BOOL
-	__stdcall 
-		ConvertWindows9xAdapterName (
-			LPCSTR szAdapterName,
-			LPSTR szUserFriendlyName,
-			DWORD dwUserFriendlyNameLength
-			)
-{
-	return CNdisApi::ConvertWindows9xAdapterName (
-						szAdapterName,
-						szUserFriendlyName,
-						dwUserFriendlyNameLength
-						);
-}
-
-void
-	__stdcall
-	RecalculateIPChecksum(
-		PINTERMEDIATE_BUFFER pPacket
-	)
-{
-	CNdisApi::RecalculateIPChecksum (pPacket);
-}
-
-void
-	__stdcall
-	RecalculateICMPChecksum(
-		PINTERMEDIATE_BUFFER pPacket
-	)
-{
-	CNdisApi::RecalculateICMPChecksum (pPacket);
-}
-
-void
-	__stdcall
-	RecalculateTCPChecksum(
-		PINTERMEDIATE_BUFFER pPacket
-	)
-{
-	CNdisApi::RecalculateTCPChecksum (pPacket);
-}
-
-void
-	__stdcall
-	RecalculateUDPChecksum(
-		PINTERMEDIATE_BUFFER pPacket
+__stdcall
+ConvertWindowsNTAdapterName(
+	LPCSTR szAdapterName,
+	LPSTR szUserFriendlyName,
+	DWORD dwUserFriendlyNameLength
 )
 {
-	CNdisApi::RecalculateUDPChecksum (pPacket);
+	return CNdisApi::ConvertWindowsNTAdapterName(
+		szAdapterName,
+		szUserFriendlyName,
+		dwUserFriendlyNameLength
+	);
+}
+
+
+BOOL
+__stdcall
+ConvertWindows2000AdapterName(
+	LPCSTR szAdapterName,
+	LPSTR szUserFriendlyName,
+	DWORD dwUserFriendlyNameLength
+)
+{
+	return CNdisApi::ConvertWindows2000AdapterName(
+		szAdapterName,
+		szUserFriendlyName,
+		dwUserFriendlyNameLength
+	);
+}
+
+BOOL
+__stdcall
+ConvertWindows9xAdapterName(
+	LPCSTR szAdapterName,
+	LPSTR szUserFriendlyName,
+	DWORD dwUserFriendlyNameLength
+)
+{
+	return CNdisApi::ConvertWindows9xAdapterName(
+		szAdapterName,
+		szUserFriendlyName,
+		dwUserFriendlyNameLength
+	);
+}
+
+void
+__stdcall
+RecalculateIPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	CNdisApi::RecalculateIPChecksum(pPacket);
+}
+
+void
+__stdcall
+RecalculateICMPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	CNdisApi::RecalculateICMPChecksum(pPacket);
+}
+
+void
+__stdcall
+RecalculateTCPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	CNdisApi::RecalculateTCPChecksum(pPacket);
+}
+
+void
+__stdcall
+RecalculateUDPChecksum(
+	PINTERMEDIATE_BUFFER pPacket
+)
+{
+	CNdisApi::RecalculateUDPChecksum(pPacket);
 }
 

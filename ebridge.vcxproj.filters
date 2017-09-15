@@ -44,10 +44,10 @@
     <ClInclude Include="ndisapi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\include\Common.h">
+    <ClInclude Include="dhcp_typedefs.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="dhcp_typedefs.h">
+    <ClInclude Include="Common.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
