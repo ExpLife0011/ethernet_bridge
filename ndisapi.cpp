@@ -6,6 +6,7 @@
 /*																		 */
 /* Description: Main dll module											 */
 /*************************************************************************/
+
 #include "stdafx.h"
 
 #define DEVICE_NDISWANIP "\\DEVICE\\NDISWANIP"
@@ -90,6 +91,13 @@ CNdisApi::CNdisApi(const TCHAR* pszFileName)
 	}
 
 	memset(m_Handle32to64, 0, sizeof(m_Handle32to64));
+
+	if(m_bIsWow64Process)
+	{
+		// Initlize m_Handle32to64
+		TCP_AdapterList AdaptersList = {0};
+		GetTcpipBoundAdaptersInfo(&AdaptersList);
+	}
 }
 
 CNdisApi::~CNdisApi()
@@ -217,17 +225,17 @@ BOOL CNdisApi::GetTcpipBoundAdaptersInfo(PTCP_AdapterList pAdapters) const
 
 								if (pos)
 									break;
-							}
-						}
+				}
+			}
 
 						if (pos)
 						{
 							m_Handle32to64[pos].QuadPart = m_AdaptersList.m_nAdapterHandle[i].QuadPart;
 							pAdapters->m_nAdapterHandle[i] = (HANDLE)static_cast<ULONG_PTR>(pos);
 						}
-					}
-				}
-			}
+		}
+	}
+}
 		}
 	}
 	else
@@ -564,7 +572,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 			free(Buffers);
 			free(pEthRequest);
 #endif // Before Visual Studio 2012
-		}
+	}
 		else
 		{
 #if _MSC_VER <= 1700 // Before Visual Studio 2012
@@ -576,7 +584,7 @@ BOOL CNdisApi::SendPacketsToAdapter(PETH_M_REQUEST pPackets) const
 #endif // Before Visual Studio 2012
 			return FALSE;
 		}
-	}
+}
 	else
 #endif //_WIN64
 	{
@@ -642,18 +650,21 @@ BOOL CNdisApi::ReadPackets(PETH_M_REQUEST pPackets) const
 				NULL
 			);
 
-			pPackets->dwPacketsSuccess = pEthRequest->dwPacketsSuccess;
-
-			for (i = 0; i < pEthRequest->dwPacketsSuccess; ++i)
+			if(bIOResult)
 			{
-				// Copy back
-				pPackets->EthPacket[i].Buffer->m_dwDeviceFlags = Buffers[i].m_dwDeviceFlags;
-				pPackets->EthPacket[i].Buffer->m_Flags = Buffers[i].m_Flags;
-				pPackets->EthPacket[i].Buffer->m_8021q = Buffers[i].m_8021q;
-				pPackets->EthPacket[i].Buffer->m_FilterID = Buffers[i].m_FilterID;
-				memmove(pPackets->EthPacket[i].Buffer->m_Reserved, Buffers[i].m_Reserved, sizeof(ULONG) * 4);
-				pPackets->EthPacket[i].Buffer->m_Length = Buffers[i].m_Length;
-				memmove(pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_IBuffer, Buffers[i].m_Length);
+				pPackets->dwPacketsSuccess = pEthRequest->dwPacketsSuccess;
+
+				for (i = 0; i < pEthRequest->dwPacketsSuccess; ++i)
+				{
+					// Copy back
+					pPackets->EthPacket[i].Buffer->m_dwDeviceFlags = Buffers[i].m_dwDeviceFlags;
+					pPackets->EthPacket[i].Buffer->m_Flags = Buffers[i].m_Flags;
+					pPackets->EthPacket[i].Buffer->m_8021q = Buffers[i].m_8021q;
+					pPackets->EthPacket[i].Buffer->m_FilterID = Buffers[i].m_FilterID;
+					memmove(pPackets->EthPacket[i].Buffer->m_Reserved, Buffers[i].m_Reserved, sizeof(ULONG) * 4);
+					pPackets->EthPacket[i].Buffer->m_Length = Buffers[i].m_Length;
+					memmove(pPackets->EthPacket[i].Buffer->m_IBuffer, Buffers[i].m_IBuffer, Buffers[i].m_Length);
+				}
 			}
 
 			free(Buffers);
@@ -745,7 +756,8 @@ BOOL CNdisApi::GetAdapterMode(PADAPTER_MODE pMode) const
 			NULL
 		);
 
-		pMode->dwFlags = AdapterMode.dwFlags;
+		if(bIOResult)
+			pMode->dwFlags = AdapterMode.dwFlags;
 
 	}
 	else
@@ -837,7 +849,7 @@ BOOL CNdisApi::GetAdapterPacketQueueSize(HANDLE hAdapter, PDWORD pdwSize) const
 	}
 
 	return bIOResult;
-}
+	}
 
 BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 {
@@ -910,7 +922,7 @@ BOOL CNdisApi::SetPacketEvent(HANDLE hAdapter, HANDLE hWin32Event) const
 	}
 
 	return bIOResult;
-}
+	}
 
 BOOL CNdisApi::SetWANEvent(HANDLE hWin32Event) const
 {
@@ -1105,7 +1117,7 @@ BOOL CNdisApi::NdisrdRequest(PPACKET_OID_DATA OidData, BOOL Set) const
 					return FALSE;
 				}
 
-			if (!Set)
+			if (bIOResult && (!Set))
 			{
 				memmove(OidData->Data, OidData64->Data, OidData64->Length);
 				OidData->Length = OidData64->Length;
@@ -1306,7 +1318,7 @@ BOOL CNdisApi::GetPacketFilterTable(PSTATIC_FILTER_TABLE pFilterList) const
 		NULL
 	);
 #ifndef _WIN64
-	if (m_bIsWow64Process)
+	if (bIOResult && m_bIsWow64Process)
 	{
 		// Adapter handle values in the table contain values which are not valid for the client
 		// and we need to post-process filter table before passing it to the client
@@ -1351,7 +1363,7 @@ BOOL CNdisApi::GetPacketFilterTableResetStats(PSTATIC_FILTER_TABLE pFilterList) 
 	);
 
 #ifndef _WIN64
-	if (m_bIsWow64Process)
+	if (bIOResult && m_bIsWow64Process)
 	{
 		// Adapter handle values in the table contain values which are not valid for the client
 		// and we need to post-process filter table before passing it to the client
@@ -1644,6 +1656,7 @@ BOOL CNdisApi::IsNdiswanInterface(LPCSTR adapterName, LPCSTR ndiswanName)
 
 	return bRetVal;
 }
+
 
 BOOL CNdisApi::IsNdiswanIp(LPCSTR adapterName)
 {
@@ -2115,127 +2128,127 @@ CNdisApi::RecalculateUDPChecksum(
 	pUdpHeader->th_sum = ntohs((unsigned short)sum);
 }
 
-HANDLE __stdcall OpenFilterDriver(const TCHAR* pszFileName)
+HANDLE __stdcall OpenFilterDriver ( const TCHAR* pszFileName )
 {
-	return (HANDLE)(new CNdisApi(pszFileName));
+	return (HANDLE)(new CNdisApi (pszFileName));
 }
-
-VOID __stdcall CloseFilterDriver(HANDLE hOpen)
+ 
+VOID __stdcall CloseFilterDriver ( HANDLE hOpen )
 {
 	delete (CNdisApi*)hOpen;
 }
 
-DWORD __stdcall GetDriverVersion(HANDLE hOpen)
+DWORD __stdcall GetDriverVersion ( HANDLE hOpen )
 {
 	if (!hOpen)
 		return 0;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->GetVersion();
+	
+	return pApi->GetVersion ();
 }
 
-BOOL __stdcall GetTcpipBoundAdaptersInfo(HANDLE hOpen, PTCP_AdapterList pAdapters)
+BOOL __stdcall GetTcpipBoundAdaptersInfo ( HANDLE hOpen, PTCP_AdapterList pAdapters )
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+
+	return pApi->GetTcpipBoundAdaptersInfo ( pAdapters );
+}
+
+BOOL __stdcall SendPacketToMstcp ( HANDLE hOpen, PETH_REQUEST pPacket )
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+
+	return pApi->SendPacketToMstcp ( pPacket );
+}
+
+BOOL __stdcall SendPacketToAdapter ( HANDLE hOpen, PETH_REQUEST pPacket )
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+
+	return pApi->SendPacketToAdapter ( pPacket );
+}
+
+BOOL __stdcall ReadPacket ( HANDLE hOpen, PETH_REQUEST pPacket )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetTcpipBoundAdaptersInfo(pAdapters);
+	return pApi->ReadPacket ( pPacket );
 }
 
-BOOL __stdcall SendPacketToMstcp(HANDLE hOpen, PETH_REQUEST pPacket)
+BOOL __stdcall SendPacketsToMstcp ( HANDLE hOpen, PETH_M_REQUEST pPackets )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->SendPacketToMstcp(pPacket);
+	return pApi->SendPacketsToMstcp ( pPackets );
 }
 
-BOOL __stdcall SendPacketToAdapter(HANDLE hOpen, PETH_REQUEST pPacket)
+BOOL __stdcall SendPacketsToAdapter ( HANDLE hOpen, PETH_M_REQUEST pPackets )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->SendPacketToAdapter(pPacket);
+	return pApi->SendPacketsToAdapter ( pPackets );
 }
 
-BOOL __stdcall ReadPacket(HANDLE hOpen, PETH_REQUEST pPacket)
+BOOL __stdcall ReadPackets ( HANDLE hOpen, PETH_M_REQUEST pPackets )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->ReadPacket(pPacket);
+	return pApi->ReadPackets ( pPackets );
 }
 
-BOOL __stdcall SendPacketsToMstcp(HANDLE hOpen, PETH_M_REQUEST pPackets)
+BOOL __stdcall SetAdapterMode ( HANDLE hOpen, PADAPTER_MODE pMode )
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+
+	return pApi->SetAdapterMode ( pMode );
+}
+
+BOOL __stdcall GetAdapterMode ( HANDLE hOpen, PADAPTER_MODE pMode )
+{
+	if (!hOpen)
+		return FALSE;
+
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
+
+	return pApi->GetAdapterMode ( pMode );
+}
+
+BOOL __stdcall FlushAdapterPacketQueue ( HANDLE hOpen, HANDLE hAdapter )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->SendPacketsToMstcp(pPackets);
+	
+	return pApi->FlushAdapterPacketQueue ( hAdapter );
 }
 
-BOOL __stdcall SendPacketsToAdapter(HANDLE hOpen, PETH_M_REQUEST pPackets)
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->SendPacketsToAdapter(pPackets);
-}
-
-BOOL __stdcall ReadPackets(HANDLE hOpen, PETH_M_REQUEST pPackets)
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->ReadPackets(pPackets);
-}
-
-BOOL __stdcall SetAdapterMode(HANDLE hOpen, PADAPTER_MODE pMode)
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->SetAdapterMode(pMode);
-}
-
-BOOL __stdcall GetAdapterMode(HANDLE hOpen, PADAPTER_MODE pMode)
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->GetAdapterMode(pMode);
-}
-
-BOOL __stdcall FlushAdapterPacketQueue(HANDLE hOpen, HANDLE hAdapter)
-{
-	if (!hOpen)
-		return FALSE;
-
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->FlushAdapterPacketQueue(hAdapter);
-}
-
-BOOL __stdcall GetAdapterPacketQueueSize(HANDLE hOpen, HANDLE hAdapter, PDWORD pdwSize)
+BOOL __stdcall GetAdapterPacketQueueSize ( HANDLE hOpen, HANDLE hAdapter , PDWORD pdwSize)
 
 {
 	if (!hOpen)
@@ -2243,264 +2256,264 @@ BOOL __stdcall GetAdapterPacketQueueSize(HANDLE hOpen, HANDLE hAdapter, PDWORD p
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
 
-	return pApi->GetAdapterPacketQueueSize(hAdapter, pdwSize);
+	return pApi->GetAdapterPacketQueueSize ( hAdapter, pdwSize ); 
 }
 
-BOOL __stdcall SetPacketEvent(HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event)
+BOOL __stdcall SetPacketEvent ( HANDLE hOpen, HANDLE hAdapter, HANDLE hWin32Event )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->SetPacketEvent(hAdapter, hWin32Event);
+	
+	return pApi->SetPacketEvent ( hAdapter, hWin32Event );
 }
 
-BOOL __stdcall SetWANEvent(HANDLE hOpen, HANDLE hWin32Event)
+BOOL __stdcall SetWANEvent ( HANDLE hOpen, HANDLE hWin32Event )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->SetWANEvent(hWin32Event);
+	
+	return pApi->SetWANEvent ( hWin32Event );
 }
 
-BOOL __stdcall SetAdapterListChangeEvent(HANDLE hOpen, HANDLE hWin32Event)
+BOOL __stdcall SetAdapterListChangeEvent ( HANDLE hOpen, HANDLE hWin32Event )
 {
 	if (!hOpen)
 		return FALSE;
 
 	CNdisApi* pApi = (CNdisApi*)(hOpen);
-
-	return pApi->SetAdapterListChangeEvent(hWin32Event);
+	
+	return pApi->SetAdapterListChangeEvent ( hWin32Event );
 }
 
-BOOL __stdcall NdisrdRequest(HANDLE hOpen, PPACKET_OID_DATA OidData, BOOL Set)
+BOOL __stdcall NdisrdRequest ( HANDLE hOpen, PPACKET_OID_DATA OidData, BOOL Set )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->NdisrdRequest(OidData, Set);
+	return pApi->NdisrdRequest ( OidData, Set );
 }
 
-BOOL __stdcall GetRasLinks(HANDLE hOpen, HANDLE hAdapter, PRAS_LINKS pLinks)
+BOOL __stdcall GetRasLinks ( HANDLE hOpen, HANDLE hAdapter, PRAS_LINKS pLinks )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->GetRasLinks(hAdapter, pLinks);
+	return pApi->GetRasLinks ( hAdapter, pLinks );
 }
 
-BOOL __stdcall SetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, DWORD Filter)
+BOOL __stdcall SetHwPacketFilter ( HANDLE hOpen, HANDLE hAdapter, DWORD Filter )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->SetHwPacketFilter(hAdapter, Filter);
+	return pApi->SetHwPacketFilter ( hAdapter, Filter );
 }
 
-BOOL __stdcall GetHwPacketFilter(HANDLE hOpen, HANDLE hAdapter, PDWORD pFilter)
+BOOL __stdcall GetHwPacketFilter ( HANDLE hOpen, HANDLE hAdapter, PDWORD pFilter )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->GetHwPacketFilter(hAdapter, pFilter);
+	return pApi->GetHwPacketFilter ( hAdapter, pFilter );
 }
 
 
-BOOL __stdcall SetPacketFilterTable(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList)
+BOOL __stdcall SetPacketFilterTable ( HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->SetPacketFilterTable(pFilterList);
+	return pApi->SetPacketFilterTable (pFilterList);
 }
 
-BOOL __stdcall ResetPacketFilterTable(HANDLE hOpen)
+BOOL __stdcall ResetPacketFilterTable ( HANDLE hOpen )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->ResetPacketFilterTable();
+	return pApi->ResetPacketFilterTable ();
 }
 
-BOOL __stdcall GetPacketFilterTableSize(HANDLE hOpen, PDWORD pdwTableSize)
+BOOL __stdcall GetPacketFilterTableSize ( HANDLE hOpen, PDWORD pdwTableSize )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->GetPacketFilterTableSize(pdwTableSize);
+	return pApi->GetPacketFilterTableSize (pdwTableSize);
 }
 
-BOOL __stdcall GetPacketFilterTable(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList)
+BOOL __stdcall GetPacketFilterTable ( HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->GetPacketFilterTable(pFilterList);
+	return pApi->GetPacketFilterTable (pFilterList);
 }
 
-BOOL __stdcall GetPacketFilterTableResetStats(HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList)
+BOOL __stdcall GetPacketFilterTableResetStats ( HANDLE hOpen, PSTATIC_FILTER_TABLE pFilterList )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->GetPacketFilterTableResetStats(pFilterList);
+	return pApi->GetPacketFilterTableResetStats (pFilterList);
 }
 
-BOOL __stdcall SetMTUDecrement(DWORD dwMTUDecrement)
+BOOL __stdcall SetMTUDecrement ( DWORD dwMTUDecrement )
 {
-	return CNdisApi::SetMTUDecrement(dwMTUDecrement);
+	return CNdisApi::SetMTUDecrement ( dwMTUDecrement );
 }
 
-DWORD __stdcall GetMTUDecrement()
+DWORD __stdcall GetMTUDecrement ()
 {
-	return CNdisApi::GetMTUDecrement();
+	return CNdisApi::GetMTUDecrement();	
 }
 
-BOOL __stdcall SetAdaptersStartupMode(DWORD dwStartupMode)
+BOOL __stdcall SetAdaptersStartupMode ( DWORD dwStartupMode )
 {
-	return CNdisApi::SetAdaptersStartupMode(dwStartupMode);
+	return CNdisApi::SetAdaptersStartupMode ( dwStartupMode );
 }
 
-DWORD __stdcall GetAdaptersStartupMode()
+DWORD __stdcall GetAdaptersStartupMode ()
 {
-	return CNdisApi::GetAdaptersStartupMode();
+	return CNdisApi::GetAdaptersStartupMode();	
 }
 
-BOOL __stdcall IsDriverLoaded(HANDLE hOpen)
+BOOL __stdcall IsDriverLoaded ( HANDLE hOpen )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
 	return pApi->IsDriverLoaded();
 }
 
-DWORD __stdcall GetBytesReturned(HANDLE hOpen)
+DWORD __stdcall GetBytesReturned ( HANDLE hOpen )
 {
 	if (!hOpen)
 		return FALSE;
 
-	CNdisApi* pApi = (CNdisApi*)(hOpen);
+	CNdisApi* pApi = (CNdisApi*)(hOpen); 
 
-	return pApi->GetBytesReturned();
+	return pApi->GetBytesReturned ();
 }
 
-BOOL __stdcall IsNdiswanIp(LPCSTR adapterName)
+BOOL __stdcall IsNdiswanIp ( LPCSTR adapterName )
 {
-	return CNdisApi::IsNdiswanIp(adapterName);
+	return CNdisApi::IsNdiswanIp (adapterName);
 }
 
-BOOL __stdcall IsNdiswanIpv6(LPCSTR adapterName)
+BOOL __stdcall IsNdiswanIpv6 ( LPCSTR adapterName )
 {
-	return CNdisApi::IsNdiswanIpv6(adapterName);
+	return CNdisApi::IsNdiswanIpv6 (adapterName);
 }
 
-BOOL __stdcall IsNdiswanBh(LPCSTR adapterName)
+BOOL __stdcall IsNdiswanBh ( LPCSTR adapterName )
 {
-	return CNdisApi::IsNdiswanBh(adapterName);
-}
-
-BOOL
-__stdcall
-ConvertWindowsNTAdapterName(
-	LPCSTR szAdapterName,
-	LPSTR szUserFriendlyName,
-	DWORD dwUserFriendlyNameLength
-)
-{
-	return CNdisApi::ConvertWindowsNTAdapterName(
-		szAdapterName,
-		szUserFriendlyName,
-		dwUserFriendlyNameLength
-	);
-}
-
-
-BOOL
-__stdcall
-ConvertWindows2000AdapterName(
-	LPCSTR szAdapterName,
-	LPSTR szUserFriendlyName,
-	DWORD dwUserFriendlyNameLength
-)
-{
-	return CNdisApi::ConvertWindows2000AdapterName(
-		szAdapterName,
-		szUserFriendlyName,
-		dwUserFriendlyNameLength
-	);
+	return CNdisApi::IsNdiswanBh (adapterName);
 }
 
 BOOL
-__stdcall
-ConvertWindows9xAdapterName(
-	LPCSTR szAdapterName,
-	LPSTR szUserFriendlyName,
-	DWORD dwUserFriendlyNameLength
-)
+	__stdcall
+		ConvertWindowsNTAdapterName (
+			LPCSTR szAdapterName,
+			LPSTR szUserFriendlyName,
+			DWORD dwUserFriendlyNameLength
+			)
 {
-	return CNdisApi::ConvertWindows9xAdapterName(
-		szAdapterName,
-		szUserFriendlyName,
-		dwUserFriendlyNameLength
-	);
+	return CNdisApi::ConvertWindowsNTAdapterName (
+						szAdapterName,
+						szUserFriendlyName,
+						dwUserFriendlyNameLength
+						);
+}
+
+
+BOOL
+	__stdcall 
+		ConvertWindows2000AdapterName (
+			LPCSTR szAdapterName,
+			LPSTR szUserFriendlyName,
+			DWORD dwUserFriendlyNameLength
+			)
+{
+	return CNdisApi::ConvertWindows2000AdapterName (
+						szAdapterName,
+						szUserFriendlyName,
+						dwUserFriendlyNameLength
+						);
+}
+
+BOOL
+	__stdcall 
+		ConvertWindows9xAdapterName (
+			LPCSTR szAdapterName,
+			LPSTR szUserFriendlyName,
+			DWORD dwUserFriendlyNameLength
+			)
+{
+	return CNdisApi::ConvertWindows9xAdapterName (
+						szAdapterName,
+						szUserFriendlyName,
+						dwUserFriendlyNameLength
+						);
 }
 
 void
-__stdcall
-RecalculateIPChecksum(
-	PINTERMEDIATE_BUFFER pPacket
-)
+	__stdcall
+	RecalculateIPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+	)
 {
-	CNdisApi::RecalculateIPChecksum(pPacket);
+	CNdisApi::RecalculateIPChecksum (pPacket);
 }
 
 void
-__stdcall
-RecalculateICMPChecksum(
-	PINTERMEDIATE_BUFFER pPacket
-)
+	__stdcall
+	RecalculateICMPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+	)
 {
-	CNdisApi::RecalculateICMPChecksum(pPacket);
+	CNdisApi::RecalculateICMPChecksum (pPacket);
 }
 
 void
-__stdcall
-RecalculateTCPChecksum(
-	PINTERMEDIATE_BUFFER pPacket
-)
+	__stdcall
+	RecalculateTCPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
+	)
 {
-	CNdisApi::RecalculateTCPChecksum(pPacket);
+	CNdisApi::RecalculateTCPChecksum (pPacket);
 }
 
 void
-__stdcall
-RecalculateUDPChecksum(
-	PINTERMEDIATE_BUFFER pPacket
+	__stdcall
+	RecalculateUDPChecksum(
+		PINTERMEDIATE_BUFFER pPacket
 )
 {
-	CNdisApi::RecalculateUDPChecksum(pPacket);
+	CNdisApi::RecalculateUDPChecksum (pPacket);
 }
 
